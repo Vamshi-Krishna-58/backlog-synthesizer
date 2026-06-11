@@ -231,29 +231,34 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set ACR pull secret
+      - name: Configure secrets and registry
         if: steps.gate.outputs.run == 'true'
         run: |
+          set -euo pipefail
           ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
-          az containerapp secret set \
-            --name "$STAGING_APP" --resource-group "$RG" \
-            --secrets "acr-password=$ACR_PASS" \
-            --output none
 
-      - name: Set app secrets
-        if: steps.gate.outputs.run == 'true'
-        run: |
+          # Set all secrets in one call
           az containerapp secret set \
             --name "$STAGING_APP" --resource-group "$RG" \
             --secrets \
+              "acr-password=$ACR_PASS" \
               "anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}" \
               "jira-api-token=${{ secrets.JIRA_API_TOKEN }}" \
               "entra-client-secret=${{ secrets.ENTRA_CLIENT_SECRET }}" \
             --output none
 
+          # Register ACR as a pull registry (separate command from update)
+          az containerapp registry set \
+            --name "$STAGING_APP" --resource-group "$RG" \
+            --server "$ACR_SERVER" \
+            --username "$ACR" \
+            --password-secret "acr-password" \
+            --output none
+
       - name: Deploy image
         if: steps.gate.outputs.run == 'true'
         run: |
+          set -euo pipefail
           IMAGE="${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}"
           az containerapp update \
             --name "$STAGING_APP" --resource-group "$RG" \
@@ -269,9 +274,6 @@ jobs:
               "ANTHROPIC_API_KEY=secretref:anthropic-api-key" \
               "JIRA_API_TOKEN=secretref:jira-api-token" \
               "ENTRA_CLIENT_SECRET=secretref:entra-client-secret" \
-            --registry-server "$ACR_SERVER" \
-            --registry-username "$ACR" \
-            --registry-password "secretref:acr-password" \
             --output none
           echo "✅ Deployed $IMAGE"
 
@@ -327,18 +329,30 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set secrets and deploy
+      - name: Configure secrets and registry
         if: steps.gate.outputs.run == 'true'
         run: |
+          set -euo pipefail
           ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
           az containerapp secret set \
             --name "$PROD_APP" --resource-group "$RG" \
             --secrets \
+              "acr-password=$ACR_PASS" \
               "anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}" \
               "jira-api-token=${{ secrets.JIRA_API_TOKEN }}" \
               "entra-client-secret=${{ secrets.ENTRA_CLIENT_SECRET }}" \
-              "acr-password=$ACR_PASS" \
             --output none
+          az containerapp registry set \
+            --name "$PROD_APP" --resource-group "$RG" \
+            --server "$ACR_SERVER" \
+            --username "$ACR" \
+            --password-secret "acr-password" \
+            --output none
+
+      - name: Deploy image
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
           IMAGE="${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}"
           az containerapp update \
             --name "$PROD_APP" --resource-group "$RG" \
@@ -355,8 +369,5 @@ jobs:
               "ANTHROPIC_API_KEY=secretref:anthropic-api-key" \
               "JIRA_API_TOKEN=secretref:jira-api-token" \
               "ENTRA_CLIENT_SECRET=secretref:entra-client-secret" \
-            --registry-server "$ACR_SERVER" \
-            --registry-username "$ACR" \
-            --registry-password "secretref:acr-password" \
             --output none
           echo "✅ Deployed $IMAGE"
