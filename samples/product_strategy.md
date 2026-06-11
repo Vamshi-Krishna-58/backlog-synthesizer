@@ -1,4 +1,4 @@
-# ApexDrive Connected Vehicle Platform — Q3 Product Strategy (Driver Experience Track)
+# Meridian Motors Connected Vehicle Platform — Q3 Product Strategy (Driver Experience Track)
 
 **Author:** Sarah Chen, VP Connected Experience
 **Status:** Draft for executive review

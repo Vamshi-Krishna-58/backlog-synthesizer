@@ -106,7 +106,7 @@
   {
     "key": "AD-278",
     "summary": "Email-to-claim ingestion for roadside assistance cases",
-    "description": "Owners email roadside assistance claims to assistance@apexdrive.com. These currently land in a shared inbox. Parse and create a structured ticket per claim.",
+    "description": "Owners email roadside assistance claims to assistance@meridianmotors.com. These currently land in a shared inbox. Parse and create a structured ticket per claim.",
     "status": "ready",
     "priority": "Medium",
     "labels": ["customer-service", "automation"]

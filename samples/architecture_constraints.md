@@ -1,4 +1,4 @@
-# ApexDrive Connected Vehicle Platform — Engineering Architecture Constraints
+# Meridian Motors Connected Vehicle Platform — Engineering Architecture Constraints
 
 **Owner:** Architecture Review Board
 **Last reviewed:** March 2026
@@ -25,7 +25,7 @@
   - Explicit owner consent stored on the vehicle record
   - Delivery only to the owner's *verified* contact method, never the shared fleet account default
   - Audit log of every notification sent, retained 7 years
-- **UNECE WP.29 / ISO 21434 cybersecurity.** All OTA update packages must be cryptographically signed by the ApexDrive Code Signing Authority. Unsigned or self-signed packages must be rejected at the TCU.
+- **UNECE WP.29 / ISO 21434 cybersecurity.** All OTA update packages must be cryptographically signed by the Meridian Motors Code Signing Authority. Unsigned or self-signed packages must be rejected at the TCU.
 - **ISO 26262 functional safety.** Updates to safety-critical ECUs (braking, steering, ADAS) require offline validation in the Hardware-in-the-Loop (HIL) test environment before any vehicle deployment. Automatic rollback of safety-critical updates is FORBIDDEN without a validated rollback image.
 - **Advertising compliance.** Placement boost for charging networks or service partners based on commercial agreements requires disclosure and Legal review. Cannot ship without sign-off.
 

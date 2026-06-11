@@ -1,12 +1,12 @@
 # Sample inputs
 
-These files describe a single fictional product — **ApexDrive Connected Vehicle Platform**, a software platform powering connected vehicles for Apex Motors, a fictional automotive OEM with ~500,000 active connected vehicles on the road — across the three input types the Backlog Synthesizer accepts.
+These files describe a single fictional product — **Meridian Motors Connected Vehicle Platform**, a software platform powering connected vehicles for Meridian Motors, a fictional automotive OEM with ~500,000 active connected vehicles on the road — across the three input types the Backlog Synthesizer accepts.
 
 The four source documents and two ticket exports cross-reference each other so the agents have genuine overlaps, conflicts, and gaps to find. A reviewer can verify the synthesis is correct by spot-checking these intentional flags.
 
-## The ApexDrive fiction in one paragraph
+## The Meridian Motors fiction in one paragraph
 
-ApexDrive is the software platform behind Apex Motors' connected vehicle experience. It supports OTA firmware updates for ~500,000 vehicles, a driver companion app (iOS/Android), an EV charging integration layer, connected services subscriptions, a warranty and recall management system (**RecallHub**, the system of record for all warranty claims), a dealer portal for ~3,000 service centres, and technician tooling (dealer diagnostic tablets running Android 13 as well as a legacy Gen1 TCU fleet in 2018–2020 model-year vehicles).
+Meridian Motors is a fictional automotive OEM whose connected vehicle platform supports OTA firmware updates for ~500,000 vehicles, a driver companion app (iOS/Android), an EV charging integration layer, connected services subscriptions, a warranty and recall management system (**RecallHub**, the system of record for all warranty claims), a dealer portal for ~3,000 service centres, and technician tooling (dealer diagnostic tablets running Android 13 as well as a legacy Gen1 TCU fleet in 2018–2020 model-year vehicles).
 
 ## The files
 
