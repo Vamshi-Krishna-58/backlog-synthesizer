@@ -1247,6 +1247,12 @@ keyring==25.7.0 \
     # via
     #   mcp-atlassian
     #   py-key-value-aio
+jeepney==0.9.0 \
+    --hash=sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683
+    # via secretstorage
+secretstorage==3.5.0 \
+    --hash=sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137
+    # via keyring
 kubernetes==36.0.2 \
     --hash=sha256:03551fcb49cae1f708f63624041e37403545b7aaed10cbf54e2b01a37a5438e3 \
     --hash=sha256:faf9b5241b58de0c4a5069f2a0ffc8ac06fece7215156cd3d3ba081a78a858b6
