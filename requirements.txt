@@ -10,7 +10,9 @@ requests>=2.31.0
 # Retrieval / shared memory / local embeddings (duplicate detector).
 sentence-transformers>=2.7.0
 numpy>=1.24.0
-chromadb>=0.4.22       # persistent vector store option
+# chromadb <1.0.0: avoids CVE-2026-45829 (affects >=1.0.0) and CVE-2025-69872
+# (diskcache) — chromadb 0.5.x does not pull in diskcache at all.
+chromadb>=0.4.22,<1.0.0
 
 # ── LangGraph / LangChain orchestration ───────────────────────────────────
 # LangGraph drives the multi-agent StateGraph pipeline (replaces the

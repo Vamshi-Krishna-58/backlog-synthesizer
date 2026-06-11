@@ -101,23 +101,19 @@ jobs:
       - name: CVE scan — pip-audit
         run: |
           mkdir -p artifacts
-          # Full scan → JSON artifact (never blocks, captures all findings).
           pip-audit -r requirements.txt \
             --format json \
             --output artifacts/pip-audit.json || true
-          # Blocking run — fail on any unfixed CVE that is NOT in the
-          # acknowledged list below.  Each entry must include the CVE ID,
-          # the affected package, and why we cannot upgrade yet.
-          #
-          # CVE-2026-45829  chromadb 1.5.9   — no fix released upstream; chromadb
-          #                                    is optional (USE_CHROMADB=0 disables).
-          #                                    Revisit when chromadb > 1.5.9 ships.
-          # CVE-2025-69872  diskcache 5.6.3  — transitive dep of chromadb; 5.6.3 is
-          #                                    the latest available. No fix upstream.
-          # CVE-2025-3000   torch 2.12.0     — transitive dep of sentence-transformers;
-          #                                    no fixed torch version published yet.
+          # Re-run without --output for human-readable exit code.
+          # CVE-2026-45829 (chromadb) is FIXED: requirements.txt pins chromadb<1.0.0;
+          #   CVE only affects >=1.0.0. Resolved to 0.6.3.
+          # CVE-2025-69872 (diskcache 5.6.3): pulled in by mcp→fastmcp→diskcache.
+          #   5.6.3 is the only available version; no fix upstream.
+          #   Revisit when fastmcp drops or patches the diskcache dependency.
+          # CVE-2025-3000 (torch): no torch<2.6.0 wheels exist for Python 3.13,
+          #   making a safe pin impossible while keeping our 3.13 CI matrix.
+          #   Revisit when PyTorch publishes a patched release.
           pip-audit -r requirements.txt \
-            --ignore-vuln CVE-2026-45829 \
             --ignore-vuln CVE-2025-69872 \
             --ignore-vuln CVE-2025-3000
 
