@@ -1,5 +1,7 @@
 .env
 venv/
+.venv/
+venv3*/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -28,3 +30,6 @@ infra/terraform/tfplan
 
 # SQLite audit log chain (runtime artifact, not source)
 logs/audit_chain.db
+
+# Auth credential file — contains bcrypt password hashes; use config/auth.yaml.example as template
+config/auth.yaml

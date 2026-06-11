@@ -5,43 +5,52 @@ pypdf>=4.0.0           # PDF transcript input
 pytest>=7.4.0
 
 # Live tool integrations (Confluence REST + future Jira live read).
-# Optional at install time — confluence_tool falls back to mock mode when
-# `requests` isn't available, but the live path needs it.
 requests>=2.31.0
 
-# Retrieval / shared memory / local embeddings (used by the duplicate
-# detector when the "Free" or "Balanced" preset is active — no LLM call
-# is made for duplicates in those modes).
+# Retrieval / shared memory / local embeddings (duplicate detector).
 sentence-transformers>=2.7.0
 numpy>=1.24.0
-chromadb>=0.4.22       # persistent vector store option (file-backed fallback already in MemoryStore)
+chromadb>=0.4.22       # persistent vector store option
 
-# Multi-agent infrastructure
-tenacity>=8.2.3        # retry logic for agent tool calls
+# ── LangGraph / LangChain orchestration ───────────────────────────────────
+# LangGraph drives the multi-agent StateGraph pipeline (replaces the
+# custom Orchestrator loop). LangChain provider packages replace the
+# direct SDK wrappers in tools/claude_tool.py, gemini_tool.py, ollama_tool.py
+# while preserving the same call() / call_for_json() public interface.
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-anthropic>=0.3.0       # ChatAnthropic — replaces direct anthropic SDK calls
+langchain-google-genai>=2.0.0    # ChatGoogleGenerativeAI — replaces google-genai calls
+langchain-community>=0.3.0       # ChatOllama (fallback if langchain-ollama not available)
+langchain-ollama>=0.2.0          # preferred Ollama integration (langchain-community shim kept)
 
-# Web UI (optional). 1.32+ is required for st.dialog (modal helpers).
-# pandas is used for the cost-panel bar/line charts in the Streamlit UI.
+# tenacity kept for non-LLM retry use cases; LangChain handles LLM retries natively
+tenacity>=8.2.3
+
+# Web UI (optional). 1.32+ required for st.dialog.
 streamlit>=1.32.0
 pandas>=2.0.0
 
 # ── Enterprise production additions ───────────────────────────────────────
 
-# Authentication — viewer / contributor / admin roles.
-# PyYAML is required by streamlit-authenticator for config/auth.yaml.
+# Authentication
 streamlit-authenticator>=0.4.0
 PyYAML>=6.0
 bcrypt>=4.0.0
+PyJWT[cryptography]>=2.8.0   # Entra ID token signature verification (RS256 + JWKS)
 
-# MCP (Model Context Protocol) — consume Atlassian + GitHub MCP servers
-# and expose the pipeline as its own MCP server.
-# PEP 508 markers: install automatically on Python 3.10+, skip silently on 3.9.
-# The Docker image (python:3.11-slim) always installs them.
-# For local dev: use Python 3.10+ venv (./start.sh uses venv313 automatically).
+# MCP (Model Context Protocol)
 mcp>=1.0.0 ; python_version >= "3.10"
 mcp-atlassian>=0.21 ; python_version >= "3.10"
 
 # OpenTelemetry — per-stage spans + optional OTLP export.
-# Only active when OTEL_ENABLED=1 is set.
 opentelemetry-api>=1.24.0
 opentelemetry-sdk>=1.24.0
-opentelemetry-exporter-otlp-proto-http>=1.24.0   # Grafana Cloud / any OTLP HTTP backend
+opentelemetry-exporter-otlp-proto-http>=1.24.0
+
+# Observability
+prometheus-client>=0.20.0          # Prometheus metrics endpoint (port 9090)
+python-json-logger>=2.0.7          # structured JSON logging (LOG_FORMAT=json)
+
+# Multi-replica budget enforcement (optional — falls back to file-based if absent)
+redis>=5.0.0                       # shared daily spend counter across pods (set REDIS_URL)

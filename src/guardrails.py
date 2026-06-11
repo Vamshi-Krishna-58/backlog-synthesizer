@@ -63,7 +63,8 @@ def run_guardrails(synthesis: dict) -> list[GuardrailFinding]:
     try:
         from telemetry import child_span as _cs
     except ImportError:
-        from contextlib import nullcontext as _cs  # type: ignore[assignment]
+        import contextlib
+        def _cs(*_a, **_kw): return contextlib.nullcontext()  # type: ignore[assignment]
 
     findings: list[GuardrailFinding] = []
     epics = synthesis.get("epics") or []

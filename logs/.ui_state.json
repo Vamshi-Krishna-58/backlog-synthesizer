@@ -12,8 +12,8 @@
   "models": {
     "parser": "ollama/llama3.2:3b",
     "constraint": "ollama/llama3.2:3b",
-    "story_writer": "claude-sonnet-4-5",
+    "story_writer": "gemini-2.5-flash",
     "epic_decomposer": "ollama/llama3.2:3b",
-    "gap_detector": "claude-sonnet-4-5"
+    "gap_detector": "gemini-2.5-flash"
   }
 }

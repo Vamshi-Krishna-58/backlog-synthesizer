@@ -23,8 +23,8 @@ demo:  ## Run the bundled sample end-to-end via the CLI (writes to outputs/)
 		--constraints samples/architecture_constraints.md \
 		--backlog samples/jira_backlog.json
 
-ui:  ## Launch the Streamlit UI at http://localhost:8501 (for demos / screenshots)
-	streamlit run app.py
+ui:  ## Launch the Streamlit UI at http://localhost:8502
+	streamlit run app.py --server.port 8502
 
 eval-fast:  ## Run the golden evaluation suite (deterministic metrics only)
 	python evaluation/run_evaluation.py --no-save-results

@@ -36,7 +36,6 @@ from memory.audit_log import AuditLog
 from memory.store import MemoryStore
 from tools.base import Tool, ToolError
 from tools.embedding_tool import EmbeddingTool
-from tools.github_tool import GithubTool
 from tools.jira_tool import JiraTool
 
 
@@ -58,7 +57,6 @@ class GapDetectorAgent(Agent):
         self,
         claude: Tool | None = None,
         jira: JiraTool | None = None,
-        github: GithubTool | None = None,
         memory: MemoryStore | None = None,
         audit: AuditLog | None = None,
         *,
@@ -72,7 +70,6 @@ class GapDetectorAgent(Agent):
         if self.claude is None:
             raise AgentError("GapDetectorAgent requires an LLM tool (claude= or tool=).")
         self.jira = jira
-        self.github = github
         self._prompt_template = self.load_prompt("gap_detector_prompt.md")
         self.use_embeddings_for_duplicates = use_embeddings_for_duplicates
         self.embedding_tool = embedding_tool

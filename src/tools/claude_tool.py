@@ -1,10 +1,20 @@
-"""Wrapped Claude API client used by every agent.
+"""Claude API client — backed by langchain-anthropic.
 
-Centralizing the API call here lets us:
-  - Pick the model once via ANTHROPIC_MODEL env var (default: claude-sonnet-4-5)
-  - Apply retry logic uniformly (via tenacity)
-  - Parse JSON responses defensively (handle fenced / prose-wrapped output)
-  - Log token usage to the audit trail
+Internally uses ``langchain_anthropic.ChatAnthropic`` while preserving the
+exact ``call()`` / ``call_for_json()`` interface that all five agents rely on.
+This means the agents themselves require no changes.
+
+Key behaviours preserved from the original implementation:
+  - Prompt caching: the system prompt is sent with ``cache_control`` when it
+    is long enough (≥ 1024 tokens ≈ 4096 chars) and the model supports it.
+  - Vision support: multimodal content blocks (images before text) are
+    forwarded as ``HumanMessage`` with a list of typed content blocks.
+  - Retry: ``max_retries`` is wired directly into ``ChatAnthropic`` — the
+    SDK retries on ``RateLimitError`` and connection errors automatically.
+  - JSON extraction: the same defensive ``_extract_json_block`` logic,
+    shared by GeminiTool and OllamaTool.
+  - Token usage: extracted from ``AIMessage.response_metadata`` and returned
+    as ``{"input_tokens": N, "output_tokens": N}`` to the audit trail.
 """
 
 from __future__ import annotations
@@ -15,46 +25,62 @@ import re
 from pathlib import Path
 from typing import Any
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
 from logger_setup import get_logger
 from tools.base import Tool, ToolError, VisionAttachment
 
+try:
+    from circuit_breaker import CLAUDE_CB as _CLAUDE_CB
+    _HAS_CB = True
+except ImportError:  # pragma: no cover
+    _HAS_CB = False
+
 logger = get_logger(__name__)
 
-DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
-MAX_RETRIES = int(os.environ.get("AGENT_MAX_RETRIES", "3"))
-PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+DEFAULT_MODEL   = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+MAX_RETRIES     = int(os.environ.get("AGENT_MAX_RETRIES", "3"))
+# Per-call HTTP timeout in seconds. Prevents a single hung API call from
+# occupying a synthesis slot for the full SYNTHESIS_TIMEOUT_SECONDS window.
+LLM_CALL_TIMEOUT = int(os.environ.get("LLM_CALL_TIMEOUT_SECONDS", "120"))
+PROMPTS_DIR   = Path(__file__).parent.parent.parent / "prompts"
 
 
-# Lazy import — tests can mock the SDK without it being installed
 try:
-    from anthropic import Anthropic, APIError, APIConnectionError, RateLimitError
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.messages import HumanMessage, SystemMessage
 except ImportError:  # pragma: no cover
-    Anthropic = None
-    APIError = APIConnectionError = RateLimitError = Exception
+    ChatAnthropic = None  # type: ignore[assignment,misc]
+    HumanMessage = SystemMessage = None  # type: ignore[assignment,misc]
 
 
 class ClaudeTool(Tool):
-    """Wrapped Claude API client with retry + JSON-safe parsing."""
+    """Claude API client using langchain-anthropic with retry + JSON parsing."""
 
     name = "claude"
 
-    def __init__(self, model: str = DEFAULT_MODEL):
-        if Anthropic is None:
+    def __init__(self, model: str = DEFAULT_MODEL) -> None:
+        if ChatAnthropic is None:
             raise ToolError(
-                "The `anthropic` package isn't installed. Run: pip install -r requirements.txt"
+                "The `langchain-anthropic` package isn't installed. "
+                "Run: pip install -r requirements.txt"
             )
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ToolError(
                 "ANTHROPIC_API_KEY isn't set. See .env.example for setup instructions."
             )
-        self._client = Anthropic(api_key=api_key)
         self.model = model
         self.system_prompt = (PROMPTS_DIR / "system_prompt.md").read_text(encoding="utf-8")
 
-    # ---------------------------------------------- public
+        # ChatAnthropic handles rate-limit / connection retries internally.
+        self._llm = ChatAnthropic(
+            model=model,
+            api_key=api_key,
+            max_retries=MAX_RETRIES,
+            temperature=0,
+            timeout=LLM_CALL_TIMEOUT,  # hard per-call HTTP timeout (seconds)
+        )
+
+    # ---------------------------------------------- public interface
 
     def call(
         self,
@@ -63,15 +89,8 @@ class ClaudeTool(Tool):
         *,
         images: list[VisionAttachment] | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """Make a single Claude API call. Returns (text, usage_dict).
-
-        When `images` is non-empty, the message is sent as a multimodal
-        content array with each image block followed by the text block.
-        Only vision-capable Claude models (Sonnet 4 / 4.5, Opus 4 / 4.5,
-        Haiku 4.5) accept images; passing them to older models causes
-        the API to error, which we surface as a ToolError.
-        """
-        return self._call_with_retry(user_message, max_tokens, images=images)
+        """Make a single Claude API call. Returns (text, usage_dict)."""
+        return self._call_internal(user_message, max_tokens, images=images)
 
     def call_for_json(
         self,
@@ -85,116 +104,149 @@ class ClaudeTool(Tool):
         parsed = self._extract_json_block(text)
         return parsed, usage
 
-    # ---------------------------------------------- retry-wrapped raw call
+    # ---------------------------------------------- internal
 
-    @retry(
-        retry=retry_if_exception_type((RateLimitError, APIConnectionError)),
-        stop=stop_after_attempt(MAX_RETRIES),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
-    def _call_with_retry(
+    def _call_internal(
         self,
         user_message: str,
         max_tokens: int,
         *,
         images: list[VisionAttachment] | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        # Build a multimodal content array when images are present. Image
-        # blocks come BEFORE the text block — Anthropic's recommendation
-        # since the model attends to vision before the textual prompt.
-        if images:
-            content: list[dict[str, Any]] = []
-            for img in images:
-                content.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": img.media_type,
-                        "data": img.data_b64,
-                    },
-                })
-            content.append({"type": "text", "text": user_message})
-            messages = [{"role": "user", "content": content}]
-        else:
-            messages = [{"role": "user", "content": user_message}]
-
-        # Prompt caching: mark the system prompt as cacheable.
-        # The system prompt is identical across every call in a pipeline run
-        # (same model, same prompt file), so Anthropic can serve it from
-        # cache after the first call — typically 80-90% cheaper on input
-        # tokens for the system block. Requires claude-3-5-* or claude-3-7-*+.
-        # Prompt caching requires at least 1024 tokens in the system prompt.
-        # Anthropic returns 400 invalid_request if the prompt is shorter.
-        # Rough estimate: 4 chars ≈ 1 token, so 4096 chars ≈ 1024 tokens.
-        system_block: list[dict[str, Any]] | str
-        _prompt_long_enough = len(self.system_prompt) >= 4096
-        if self.model.startswith("claude") and _prompt_long_enough:
-            system_block = [
-                {
-                    "type": "text",
-                    "text": self.system_prompt,
+        # ---- System message (with optional prompt caching) ----
+        # Anthropic caches system blocks when cache_control is set and the block
+        # is ≥ 1024 tokens (≈ 4096 chars).  We pass the cache_control dict as
+        # part of the content list, which langchain-anthropic forwards verbatim.
+        _cacheable = self.model.startswith("claude") and len(self.system_prompt) >= 4096
+        if _cacheable:
+            system_msg = SystemMessage(
+                content=[{
+                    "type":          "text",
+                    "text":          self.system_prompt,
                     "cache_control": {"type": "ephemeral"},
-                }
-            ]
+                }]
+            )
         else:
-            system_block = self.system_prompt
+            system_msg = SystemMessage(content=self.system_prompt)
 
+        # ---- User message (multimodal when images are present) ----
+        if images:
+            # Image blocks come BEFORE the text block — Anthropic's recommendation.
+            content: list[dict[str, Any]] = [
+                {
+                    "type":   "image",
+                    "source": {
+                        "type":       "base64",
+                        "media_type": img.media_type,
+                        "data":       img.data_b64,
+                    },
+                }
+                for img in images
+            ]
+            content.append({"type": "text", "text": user_message})
+            human_msg = HumanMessage(content=content)
+        else:
+            human_msg = HumanMessage(content=user_message)
+
+        # ---- Telemetry span (no-op if opentelemetry isn't enabled) ----
         try:
             from telemetry import child_span as _cs
         except ImportError:
-            from contextlib import nullcontext as _cs  # type: ignore[assignment]
+            import contextlib
+            def _cs(*_a, **_kw):  # type: ignore[misc]
+                return contextlib.nullcontext()
 
         with _cs(
             "llm.call",
             **{
-                "llm.provider": "anthropic",
-                "llm.model": self.model,
-                "llm.max_tokens": max_tokens,
-                "llm.has_images": bool(images),
+                "llm.provider":    "anthropic",
+                "llm.model":       self.model,
+                "llm.max_tokens":  max_tokens,
+                "llm.has_images":  bool(images),
             },
-        ) as _llm_span:
+        ) as _span:
             try:
-                response = self._client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    system=system_block,
-                    messages=messages,
+                # .bind() creates a new model instance with max_tokens set;
+                # this is the standard LangChain pattern for per-call overrides.
+                response = self._llm.bind(max_tokens=max_tokens).invoke(
+                    [system_msg, human_msg]
                 )
-            except (RateLimitError, APIConnectionError):
-                raise  # let tenacity catch + retry
-            except APIError as e:
-                raise ToolError(f"Anthropic API error: {e}") from e
+            except Exception as exc:
+                msg = str(exc).lower()
+                transient = any(t in msg for t in (
+                    "rate", "429", "overloaded", "connection",
+                    "timeout", "unavailable",
+                ))
+                if transient and _HAS_CB:
+                    _CLAUDE_CB.record_failure()
+                if transient:
+                    raise ToolError(f"Anthropic transient error: {exc}") from exc
+                raise ToolError(f"Anthropic API error: {exc}") from exc
 
-            parts = [b.text for b in response.content if hasattr(b, "text")]
-            text = "".join(parts)
-            usage = {
-                "input_tokens": getattr(response.usage, "input_tokens", None),
-                "output_tokens": getattr(response.usage, "output_tokens", None),
+            # ---- Extract text ----
+            raw = response.content
+            if isinstance(raw, str):
+                text = raw
+            else:
+                # Content blocks list — join text segments
+                text = "".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in (raw or [])
+                )
+
+            # ---- Extract usage from response metadata ----
+            meta  = getattr(response, "response_metadata", {}) or {}
+            udata = meta.get("usage", {}) or {}
+            usage: dict[str, Any] = {
+                "input_tokens":  udata.get("input_tokens"),
+                "output_tokens": udata.get("output_tokens"),
             }
+
             try:
-                _llm_span.set_attribute("llm.tokens_in",  usage["input_tokens"]  or 0)
-                _llm_span.set_attribute("llm.tokens_out", usage["output_tokens"] or 0)
-                _llm_span.set_attribute("llm.response_chars", len(text))
+                _span.set_attribute("llm.tokens_in",     usage["input_tokens"]  or 0)
+                _span.set_attribute("llm.tokens_out",    usage["output_tokens"] or 0)
+                _span.set_attribute("llm.response_chars", len(text))
             except Exception:  # noqa: BLE001
                 pass
+
+            if _HAS_CB:
+                _CLAUDE_CB.record_success()
             return text, usage
 
     # ---------------------------------------------- JSON extraction
+    # Shared by GeminiTool and OllamaTool via import.
 
     @staticmethod
     def _extract_json_block(text: str) -> dict:
         """Pull a JSON object out of model output. Handles fences and prose."""
-        # Try fenced block first
         fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if fence_match:
-            candidate = fence_match.group(1)
+            candidates = [fence_match.group(1)]
         else:
-            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-            if not brace_match:
-                raise ToolError(f"No JSON object found in model output:\n{text[:300]}")
-            candidate = brace_match.group(0)
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError as e:
-            raise ToolError(f"Model produced invalid JSON: {e}\nGot:\n{candidate[:500]}")
+            candidates = [text[m.start():] for m in re.finditer(r"\{", text)]
+
+        if not candidates:
+            raise ToolError(f"No JSON object found in model output:\n{text[:300]}")
+
+        last_err: Exception = ValueError("no candidates")
+        for raw in candidates:
+            depth = 0
+            end   = -1
+            for i, ch in enumerate(raw):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            candidate = raw[:end] if end > 0 else raw
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                last_err = exc
+                continue
+
+        raise ToolError(
+            f"Model produced invalid JSON: {last_err}\nGot:\n{candidates[0][:500]}"
+        )

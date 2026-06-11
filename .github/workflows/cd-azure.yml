@@ -1,0 +1,285 @@
+name: Deploy → Azure
+
+# Runs automatically on every push to main (after CI passes in ci.yml).
+# Can also be triggered manually to re-deploy any ref without a code change.
+#
+# Pipeline: build + push ACR → deploy staging → smoke test → canary deploy (10 %, manual gate) → canary verify → canary promote (100 %)
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   AZURE_CREDENTIALS          JSON from `az ad sp create-for-rbac --sdk-auth`
+#   ACR_REGISTRY               e.g. backlogsynth.azurecr.io
+#   AZURE_RESOURCE_GROUP       e.g. rg-backlog-synthesizer
+#   CONTAINERAPP_NAME          prod Container App name, e.g. backlog-synthesizer
+#   CONTAINERAPP_NAME_STAGING  staging Container App name, e.g. backlog-synthesizer-staging
+#
+# Required GitHub Environments (Settings → Environments):
+#   azure-staging    — no protection rules; auto-deploys on every push to main
+#   azure-production — add "Required reviewers" to enforce a manual approval gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_staging:
+        description: Skip staging and deploy directly to production (emergency only)
+        type: boolean
+        default: false
+
+jobs:
+  # ── 1. Build image and push to Azure Container Registry ──────────────────
+  push-acr:
+    name: Build & push → ACR
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      image: ${{ steps.img.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        # Strip the .azurecr.io suffix to get the short registry name for az acr login.
+        run: |
+          ACR_NAME=$(echo "${{ secrets.ACR_REGISTRY }}" | sed 's/\.azurecr\.io//')
+          az acr login --name "$ACR_NAME"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.ACR_REGISTRY }}/backlog-synthesizer:${{ github.sha }}
+            ${{ secrets.ACR_REGISTRY }}/backlog-synthesizer:latest
+          # Warm the GHA layer cache so subsequent runs skip unchanged layers
+          # (Python deps layer is ~1 GB; cached it saves ~4 min per deploy).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record image reference
+        id: img
+        run: echo "image=${{ secrets.ACR_REGISTRY }}/backlog-synthesizer:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Deploy to staging ──────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → Azure staging
+    runs-on: ubuntu-latest
+    needs: push-acr
+    if: ${{ !inputs.skip_staging }}
+    environment: azure-staging
+    timeout-minutes: 10
+    outputs:
+      health_url: ${{ steps.url.outputs.health_url }}
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update staging Container App
+        run: |
+          az containerapp update \
+            --name "${{ secrets.CONTAINERAPP_NAME_STAGING }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ needs.push-acr.outputs.image }}" \
+            --output none
+          echo "Staging updated → ${{ needs.push-acr.outputs.image }}"
+
+      - name: Resolve staging URL
+        id: url
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ secrets.CONTAINERAPP_NAME_STAGING }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "Staging: https://$FQDN"
+          echo "health_url=https://$FQDN/_stcore/health" >> "$GITHUB_OUTPUT"
+
+  # ── 3. Smoke test staging ─────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test — staging health
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    timeout-minutes: 5
+
+    steps:
+      - name: Wait for healthy response (2-min window, 10-s intervals)
+        run: |
+          URL="${{ needs.deploy-staging.outputs.health_url }}"
+          echo "Probing: $URL"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "Attempt $i/12: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && { echo "Staging healthy."; exit 0; }
+            sleep 10
+          done
+          echo "ERROR: health endpoint did not return 200 within 2 minutes." >&2
+          exit 1
+
+  # ── 4. Canary deploy (10 % traffic, requires manual approval) ───────────────
+  canary-deploy:
+    name: Canary deploy → Azure production (10 %)
+    runs-on: ubuntu-latest
+    # Wait for smoke test when staging ran; skip straight here when emergency bypass used.
+    needs: [push-acr, smoke-test]
+    if: ${{ always() && needs.push-acr.result == 'success' && (needs.smoke-test.result == 'success' || inputs.skip_staging) }}
+    environment: azure-production   # ← add "Required reviewers" in repo Settings
+    timeout-minutes: 15
+    outputs:
+      new_rev: ${{ steps.canary.outputs.new_rev }}
+      old_rev: ${{ steps.canary.outputs.old_rev }}
+      health_url: ${{ steps.canary.outputs.health_url }}
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy canary revision (10 % traffic)
+        id: canary
+        run: |
+          APP="${{ secrets.CONTAINERAPP_NAME }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          IMAGE="${{ needs.push-acr.outputs.image }}"
+          SUFFIX="sha-${GITHUB_SHA::8}"
+
+          # Deploy new revision (no traffic yet)
+          az containerapp update \
+            --name "$APP" --resource-group "$RG" \
+            --image "$IMAGE" \
+            --revision-suffix "$SUFFIX" \
+            --output none
+
+          # Wait briefly for the revision to appear
+          sleep 5
+
+          # Get the new revision name (most recently created)
+          NEW_REV=$(az containerapp revision list \
+            --name "$APP" --resource-group "$RG" \
+            --query "sort_by([].{name:name,t:properties.createdTime}, &t)[-1].name" -o tsv)
+
+          # Get the previous active revision (second most recent active)
+          OLD_REV=$(az containerapp revision list \
+            --name "$APP" --resource-group "$RG" \
+            --query "sort_by([?properties.active==\`true\`].{name:name,t:properties.createdTime}, &t)[-2].name" -o tsv 2>/dev/null || echo "")
+
+          echo "New revision: $NEW_REV"
+          echo "Old revision: ${OLD_REV:-none}"
+          echo "new_rev=$NEW_REV" >> "$GITHUB_OUTPUT"
+          echo "old_rev=$OLD_REV" >> "$GITHUB_OUTPUT"
+
+          # Set canary split: 10% new, 90% old (or 100% new if no old revision)
+          if [ -n "$OLD_REV" ] && [ "$OLD_REV" != "$NEW_REV" ]; then
+            az containerapp ingress traffic set \
+              --name "$APP" --resource-group "$RG" \
+              --revision-weight "$NEW_REV=10" "$OLD_REV=90"
+            echo "Canary: 10% → $NEW_REV, 90% → $OLD_REV"
+          else
+            az containerapp ingress traffic set \
+              --name "$APP" --resource-group "$RG" \
+              --revision-weight "$NEW_REV=100"
+            echo "No prior active revision — routing 100% to new revision."
+          fi
+
+          FQDN=$(az containerapp show \
+            --name "$APP" --resource-group "$RG" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "health_url=https://$FQDN/_stcore/health" >> "$GITHUB_OUTPUT"
+
+      - name: Rollback canary on failure
+        if: failure()
+        run: |
+          OLD_REV="${{ steps.canary.outputs.old_rev }}"
+          if [ -n "$OLD_REV" ]; then
+            echo "Rolling back — routing 100% traffic to: $OLD_REV"
+            az containerapp ingress traffic set \
+              --name "${{ secrets.CONTAINERAPP_NAME }}" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --revision-weight "$OLD_REV=100" || true
+          else
+            echo "No prior active revision recorded; skipping traffic rollback."
+          fi
+
+  # ── 5. Verify canary health (automated, no approval gate) ────────────────
+  canary-verify:
+    name: Verify canary health
+    runs-on: ubuntu-latest
+    needs: canary-deploy
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify canary health (3-minute window, 15-s intervals)
+        run: |
+          URL="${{ needs.canary-deploy.outputs.health_url }}"
+          echo "Probing: $URL"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "Attempt $i/12: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && { echo "Canary healthy."; exit 0; }
+            sleep 15
+          done
+          echo "ERROR: canary health endpoint did not return 200 within 3 minutes." >&2
+          exit 1
+
+  # ── 6. Promote canary to 100 % traffic ───────────────────────────────────
+  canary-promote:
+    name: Promote canary → 100 % production
+    runs-on: ubuntu-latest
+    needs: [canary-deploy, canary-verify]
+    timeout-minutes: 5
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Promote canary to 100 % traffic
+        run: |
+          NEW_REV="${{ needs.canary-deploy.outputs.new_rev }}"
+          az containerapp ingress traffic set \
+            --name "${{ secrets.CONTAINERAPP_NAME }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --revision-weight "$NEW_REV=100"
+          echo "Production now 100% on $NEW_REV"
+
+      - name: Deactivate old revisions (keep last 2)
+        run: |
+          APP="${{ secrets.CONTAINERAPP_NAME }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          # List all revisions sorted by creation time; deactivate all but the two most recent
+          REVS=$(az containerapp revision list \
+            --name "$APP" --resource-group "$RG" \
+            --query "sort_by([].{name:name,t:properties.createdTime,active:properties.active}, &t)[:-2][].name" -o tsv)
+          for REV in $REVS; do
+            echo "Deactivating old revision: $REV"
+            az containerapp revision deactivate --name "$APP" --resource-group "$RG" --revision "$REV" --output none || true
+          done
+
+      - name: Verify production health
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ secrets.CONTAINERAPP_NAME }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          URL="https://$FQDN/_stcore/health"
+          echo "Probing: $URL"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "Attempt $i/18: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && { echo "Production healthy."; echo "Live at: https://$FQDN"; exit 0; }
+            sleep 10
+          done
+          echo "ERROR: production health check failed." >&2
+          exit 1

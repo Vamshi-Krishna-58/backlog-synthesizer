@@ -180,7 +180,8 @@ class MCPJiraTool(JiraTool):
         try:
             from telemetry import child_span as _cs
         except ImportError:
-            from contextlib import nullcontext as _cs  # type: ignore[assignment]
+            import contextlib
+            def _cs(*_a, **_kw): return contextlib.nullcontext()  # type: ignore[assignment]
         with _cs("tool.jira_search", **{"tool.transport": "atlassian_mcp", "tool.jql": jql[:120]}) as _span:
             raw = _call_mcp_tool("jira_search", {
                 "jql": jql,

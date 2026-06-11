@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 class TestEntraAuth:
 
     def _make_id_token(self, claims: dict) -> str:
-        """Encode a fake JWT with the given payload claims."""
+        """Encode a fake JWT (unsigned) with the given payload claims."""
         import base64, json
         header  = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
         payload = base64.urlsafe_b64encode(
@@ -36,18 +36,27 @@ class TestEntraAuth:
         ).rstrip(b"=").decode()
         return f"{header}.{payload}.fakesig"
 
+    @staticmethod
+    def _fake_verify(token: str) -> dict:
+        """Bypass JWKS verification for unit tests by base64-decoding the payload."""
+        import base64, json
+        parts = token.split(".")
+        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        return json.loads(base64.urlsafe_b64decode(padded))
+
     def test_admin_role_case_insensitive(self, monkeypatch):
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")
         monkeypatch.setenv("ENTRA_CLIENT_ID",     "fake-client")
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "fake-secret")
-        from entra_auth import parse_user
+        import entra_auth
+        monkeypatch.setattr(entra_auth, "_verify_id_token", self._fake_verify)
         id_token = self._make_id_token({
             "name": "Admin User",
             "preferred_username": "admin@corp.onmicrosoft.com",
             "oid": "abc123",
             "roles": ["Admin"],   # capital A — must still map to "admin"
         })
-        user = parse_user({"id_token": id_token})
+        user = entra_auth.parse_user({"id_token": id_token})
         assert user["role"] == "admin"
         assert user["name"] == "Admin User"
 
@@ -55,36 +64,40 @@ class TestEntraAuth:
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")
         monkeypatch.setenv("ENTRA_CLIENT_ID",     "fake-client")
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "fake-secret")
-        from entra_auth import parse_user
+        import entra_auth
+        monkeypatch.setattr(entra_auth, "_verify_id_token", self._fake_verify)
         id_token = self._make_id_token({"roles": ["Contributor"], "preferred_username": "pm@corp.com"})
-        user = parse_user({"id_token": id_token})
+        user = entra_auth.parse_user({"id_token": id_token})
         assert user["role"] == "contributor"
 
     def test_viewer_role_maps_correctly(self, monkeypatch):
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")
         monkeypatch.setenv("ENTRA_CLIENT_ID",     "fake-client")
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "fake-secret")
-        from entra_auth import parse_user
+        import entra_auth
+        monkeypatch.setattr(entra_auth, "_verify_id_token", self._fake_verify)
         id_token = self._make_id_token({"roles": ["Viewer"], "preferred_username": "v@corp.com"})
-        user = parse_user({"id_token": id_token})
+        user = entra_auth.parse_user({"id_token": id_token})
         assert user["role"] == "viewer"
 
     def test_no_roles_defaults_to_viewer(self, monkeypatch):
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")
         monkeypatch.setenv("ENTRA_CLIENT_ID",     "fake-client")
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "fake-secret")
-        from entra_auth import parse_user
+        import entra_auth
+        monkeypatch.setattr(entra_auth, "_verify_id_token", self._fake_verify)
         id_token = self._make_id_token({"preferred_username": "unknown@corp.com"})
-        user = parse_user({"id_token": id_token})
+        user = entra_auth.parse_user({"id_token": id_token})
         assert user["role"] == "viewer"
 
     def test_admin_takes_priority_over_viewer(self, monkeypatch):
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")
         monkeypatch.setenv("ENTRA_CLIENT_ID",     "fake-client")
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "fake-secret")
-        from entra_auth import parse_user
+        import entra_auth
+        monkeypatch.setattr(entra_auth, "_verify_id_token", self._fake_verify)
         id_token = self._make_id_token({"roles": ["Viewer", "Admin"], "preferred_username": "x@c.com"})
-        user = parse_user({"id_token": id_token})
+        user = entra_auth.parse_user({"id_token": id_token})
         assert user["role"] == "admin"
 
     def test_get_auth_url_contains_client_id(self, monkeypatch):
@@ -95,11 +108,13 @@ class TestEntraAuth:
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "secret")
         import importlib, entra_auth as ea
         importlib.reload(ea)
-        url = ea.get_auth_url()
+        nonce = ea.generate_state_nonce()
+        url = ea.get_auth_url(state=nonce)
         assert "fake-client-id" in url
         assert "corp.onmicrosoft.com" in url
         assert "response_type=code" in url
         assert "prompt=login" in url
+        assert nonce in url
 
     def test_is_enabled_returns_false_when_vars_missing(self, monkeypatch):
         monkeypatch.delenv("ENTRA_TENANT_ID", raising=False)
@@ -138,21 +153,21 @@ class TestAgentLevelTraces:
         monkeypatch.setenv("OTEL_ENABLED", "0")
         import inspect
         from tools.claude_tool import ClaudeTool
-        src = inspect.getsource(ClaudeTool._call_with_retry)
+        src = inspect.getsource(ClaudeTool._call_internal)
         assert "child_span" in src or "llm.call" in src
 
     def test_gemini_tool_wraps_call_in_span(self, monkeypatch):
         monkeypatch.setenv("OTEL_ENABLED", "0")
         import inspect
         from tools.gemini_tool import GeminiTool
-        src = inspect.getsource(GeminiTool._call_with_retry)
+        src = inspect.getsource(GeminiTool._call_internal)
         assert "child_span" in src or "_cs" in src
 
     def test_ollama_tool_wraps_call_in_span(self, monkeypatch):
         monkeypatch.setenv("OTEL_ENABLED", "0")
         import inspect
         from tools.ollama_tool import OllamaTool
-        src = inspect.getsource(OllamaTool.call)
+        src = inspect.getsource(OllamaTool._call_internal)
         assert "child_span" in src or "_cs" in src
 
     def test_guardrails_emit_spans_per_check(self, monkeypatch):
@@ -205,12 +220,11 @@ class TestMemoryStoreChromaRouting:
 class TestMCPServer:
 
     def test_all_five_tools_registered(self):
-        import asyncio, sys
+        import sys
         sys.path.insert(0, str(ROOT / "src"))
         import mcp_server
-        async def get_tools():
-            return await mcp_server.mcp._tool_manager.get_tools()
-        tools = asyncio.run(get_tools())
+        # FastMCP stores tools in _tool_manager._tools (dict keyed by name)
+        tools = mcp_server.mcp._tool_manager._tools
         names = set(tools.keys())
         assert "synthesize_backlog" in names
         assert "preview_prompts"    in names

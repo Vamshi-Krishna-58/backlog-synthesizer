@@ -10,7 +10,7 @@
 #   1. Starts Ollama (if installed and not already running)
 #   2. Activates the Python 3.13 venv (has mcp + all deps)
 #   3. Loads .env
-#   4. Starts Streamlit on port 8501
+#   4. Starts Streamlit on port 8502
 #
 # Press Ctrl+C to stop.
 # =============================================================================
@@ -51,7 +51,7 @@ fi
 # requirements.txt uses PEP 508 markers so mcp installs automatically on 3.10+.
 # Priority: venv313 > venv312 > venv311 > venv310 > venv (3.9 fallback)
 VENV=""
-for _candidate in venv313 venv312 venv311 venv310 venv; do
+for _candidate in .venv venv313 venv312 venv311 venv310 venv; do
     if [ -f "$ROOT/$_candidate/bin/activate" ]; then
         VENV="$ROOT/$_candidate"
         break
@@ -60,7 +60,7 @@ done
 
 if [ -z "$VENV" ]; then
     echo "ERROR: No venv found."
-    echo "Create one: python3.13 -m venv venv313 && source venv313/bin/activate && pip install -r requirements.txt"
+    echo "Create one: python3.13 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
     exit 1
 fi
 
@@ -85,7 +85,7 @@ else
 fi
 
 # ── 4. Start Streamlit ───────────────────────────────────────────────────────
-PORT="${PORT:-8501}"
+PORT="${PORT:-8502}"
 info "Starting Streamlit on http://localhost:${PORT} …"
 echo ""
 echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

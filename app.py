@@ -14,6 +14,7 @@ synthesis you can run via `python src/main.py` you can also run here.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import os
 import queue as _queue
@@ -40,6 +41,24 @@ ROOT = Path(__file__).resolve().parent
 # deployment platform (Fly.io secrets, AWS Secrets Manager, etc.).
 load_dotenv(ROOT / ".env")
 
+# Configurable client / org name shown on the login page and in the UI.
+# Override with CLIENT_NAME env var — no code change needed for redeployment.
+CLIENT_NAME: str = os.environ.get("CLIENT_NAME", "NorthStar Retail")
+
+# --- Persistent-storage directories (overridable via env vars for Azure) ---
+# In Azure, a single Azure Files share is mounted at /app/backlog-data; the
+# env vars point logs and outputs to subdirectories inside that mount so all
+# persistent data lands on the durable share rather than the ephemeral container
+# layer.  Locally these default to ROOT/logs and ROOT/outputs as before.
+LOGS_DIR    = Path(os.environ.get("LOGS_DIR",    str(ROOT / "logs")))
+OUTPUTS_DIR = Path(os.environ.get("OUTPUTS_DIR", str(ROOT / "outputs")))
+
+# --- Graceful shutdown (container SIGTERM) ---
+# entrypoint.sh writes this flag file when it receives SIGTERM.
+# The synthesis polling loop checks it and cancels the active run between
+# LLM stages so the call is never abandoned mid-stream.
+_SHUTDOWN_FLAG = Path(os.environ.get("SHUTDOWN_FLAG_PATH", "/tmp/.shutdown_requested"))
+
 # Same Atlassian tenant — same credentials work for Jira and Confluence.
 for _conf, _jira in (
     ("CONFLUENCE_BASE_URL", "JIRA_BASE_URL"),
@@ -51,20 +70,61 @@ for _conf, _jira in (
 
 sys.path.insert(0, str(ROOT / "src"))
 
+# Streamlit's hot-reload re-executes app.py in the same process without clearing
+# sys.modules. Evict every module sourced from src/ so we always get the current
+# version on each run — prevents stale-module errors after code changes.
+#
+# Excluded: modules that hold process-level singletons that cannot be
+# re-initialised without side effects:
+#   metrics        — Prometheus REGISTRY is process-global; re-registering the
+#                    same metric names raises ValueError.
+#   circuit_breaker — CLAUDE_CB / GEMINI_CB state must persist across runs so
+#                    the breaker doesn't reset on every Streamlit hot-reload.
+_src_prefix = str(ROOT / "src")
+_EVICT_SKIP = {"metrics", "circuit_breaker"}
+for _mod_name in [k for k, v in sys.modules.items()
+                  if getattr(v, "__file__", None) and
+                  str(getattr(v, "__file__", "")).startswith(_src_prefix) and
+                  k.split(".")[-1] not in _EVICT_SKIP and
+                  k not in _EVICT_SKIP]:
+    del sys.modules[_mod_name]
+
 from input_loader import load_text, load_tickets, InputError  # noqa: E402
 from orchestrator import Orchestrator  # noqa: E402
 from output_formatter import write_outputs  # noqa: E402
 from ui.styling import get_css  # noqa: E402
-from pricing import estimate_cost_usd  # noqa: E402
-from startup_check import check_required_secrets, get_configured_integrations, check_python_version  # noqa: E402
-from rate_limiter import check_rate_limit, get_usage_summary, RateLimitError  # noqa: E402
-from feature_flags import FeatureFlags  # noqa: E402
+from ui.cost import (  # noqa: E402
+    estimate_cost_usd,
+    _model_for_agent,
+    _AGENT_CLASS_TO_STAGE,
+    _PRE_RUN_OUTPUT_BUDGET,
+    _estimate_pre_run_cost,
+    _compute_total_cost,
+)
+from ui.run_history import (  # noqa: E402
+    RUNS_DIR, DAILY_BUDGET_USD,
+    _user_runs_dir, _save_run_to_disk, _load_run_history,
+    _user_today_spend, _load_all_user_runs,
+    show_run_history_dialog,
+)
+from startup_check import check_required_secrets, get_configured_integrations, check_python_version, check_secret_formats  # noqa: E402
 
-# Load feature flags once per session. Cached in session_state so editing
-# them in the Admin panel and clicking Save triggers a reload via st.rerun().
-if "feature_flags" not in st.session_state:
-    st.session_state.feature_flags = FeatureFlags.load()
-_ff: FeatureFlags = st.session_state.feature_flags
+# Per-user request rate limits (independent of $ budget).
+# 0 = disabled for that window.
+MAX_SYNTHESES_PER_HOUR: int = int(os.environ.get("MAX_SYNTHESES_PER_HOUR", "0"))
+MAX_SYNTHESES_PER_DAY:  int = int(os.environ.get("MAX_SYNTHESES_PER_DAY",  "0"))
+from metrics import (  # noqa: E402
+    start_metrics_server,
+    record_synthesis_start,
+    record_synthesis_end,
+)
+from memory.store import preload_embedder  # noqa: E402
+from memory.audit_log import AuditLog  # noqa: E402
+from budget_store import (  # noqa: E402
+    get_today_spend, record_spend, is_over_budget,
+    try_reserve, settle_reservation,
+    check_rate_limit, increment_request_count, get_request_counts,
+)
 
 # -------------------------------------------------------- startup validation
 # Runs once per Streamlit session. Hard-fails on missing ANTHROPIC_API_KEY;
@@ -76,6 +136,48 @@ except RuntimeError as _startup_err:
     st.error(f"**Configuration error:** {_startup_err}")
     st.info("Set the required environment variables and restart the app. See `.env.example`.")
     st.stop()
+try:
+    _startup_warnings += check_secret_formats()
+except Exception:  # noqa: BLE001 — format checks must never crash startup
+    pass
+
+# -------------------------------------------------------- Metrics server
+# Start once per process (idempotent inside start_metrics_server).
+# Runs on METRICS_PORT (default 9090) in a daemon thread, independently
+# of Streamlit. Point Prometheus at http://<host>:9090/metrics.
+start_metrics_server()
+# Pre-warm the sentence-transformer in a background thread so the first
+# synthesis that needs duplicate detection does not pay the ~300ms load cost.
+preload_embedder()
+# Purge audit log rows older than AUDIT_LOG_RETENTION_DAYS (0 = keep forever).
+# Runs once per Streamlit process start, not on every hot-reload.
+if "audit_purge_done" not in st.session_state:
+    threading.Thread(
+        target=AuditLog.purge_old_runs,
+        daemon=True,
+        name="audit-retention-purge",
+    ).start()
+    st.session_state["audit_purge_done"] = True
+
+# -------------------------------------------------------- Synthesis concurrency guard
+# Semaphore allows up to MAX_CONCURRENT_SYNTHESES pipelines to run in the same
+# process simultaneously (e.g. 3 users on a single container). Increase it when
+# horizontal scaling is not available; set to 1 to force strict serialization.
+_MAX_CONCURRENT_SYNTHESES = int(os.environ.get("MAX_CONCURRENT_SYNTHESES", "3"))
+_SYNTHESIS_SEMAPHORE = threading.Semaphore(_MAX_CONCURRENT_SYNTHESES)
+# Maximum wall-clock seconds a synthesis may run before it is auto-cancelled.
+# Protects against orphaned threads when the browser disconnects mid-run.
+_SYNTHESIS_TIMEOUT = int(os.environ.get("SYNTHESIS_TIMEOUT_SECONDS", "600"))
+
+# -------------------------------------------------------- Upload safety limits
+# Hard cap on user-uploaded file size. A 50 MB transcript would pass through
+# all 5 LLM stages, generating unbounded API cost. Default: 512 KB.
+_MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(512 * 1024)))
+
+# Injection scanning is delegated entirely to security.InputSanitizer, which
+# is the single source of truth for all 8 injection rules.  The old duplicate
+# _INJECTION_PATTERNS list has been removed to prevent the two code paths from
+# diverging when rules are updated.
 
 # -------------------------------------------------------- Ollama auto-start
 # Start Ollama in the background if any stage uses a local model and the
@@ -114,27 +216,48 @@ st.markdown(get_css(), unsafe_allow_html=True)
 
 _auth_disabled = os.environ.get("AUTH_DISABLED", "").strip() == "1"
 _current_user: str = "local"
-_current_role: str = "admin"
+_current_role: str = "contributor"
 _authenticator = None
 
 sys.path.insert(0, str(ROOT / "src"))
-from entra_auth import is_enabled as _entra_enabled, get_auth_url, exchange_code_for_token, parse_user  # noqa: E402
+from entra_auth import (  # noqa: E402
+    is_enabled as _entra_enabled,
+    get_auth_url,
+    generate_state_nonce,
+    exchange_code_for_token,
+    parse_user,
+)
 
 if not _auth_disabled:
 
     if _entra_enabled():
         # ── Entra ID SSO path ─────────────────────────────────────────────────
-        # OAuth2 authorization code flow via MSAL.
+        # OAuth2 authorization code flow.
         # Step 1: check if Microsoft just redirected back with ?code=
         _query = st.query_params
         _auth_code = _query.get("code", "")
         _auth_error = _query.get("error", "")
+        _returned_state = _query.get("state", "")
 
         if _auth_error:
             st.error(f"Microsoft login error: {_query.get('error_description', _auth_error)}")
             st.stop()
 
         if _auth_code and "entra_user" not in st.session_state:
+            # CSRF / authorization-code injection protection: verify that the
+            # `state` param returned by Microsoft matches the nonce we generated
+            # before the redirect. A mismatch means someone tried to swap codes.
+            _expected_state = st.session_state.get("_oauth_state", "")
+            if not _expected_state or _returned_state != _expected_state:
+                st.error(
+                    "Login failed: OAuth2 state mismatch — possible CSRF attempt. "
+                    "Please try signing in again."
+                )
+                st.session_state.pop("_oauth_state", None)
+                st.query_params.clear()
+                st.stop()
+            st.session_state.pop("_oauth_state", None)  # consume nonce
+
             # Exchange the one-time code for a token
             with st.spinner("Signing in with Microsoft…"):
                 _token_result = exchange_code_for_token(_auth_code)
@@ -144,13 +267,23 @@ if not _auth_disabled:
                     st.query_params.clear()
                     st.rerun()
                 st.stop()
-            # Store user info in session state and clear the ?code= from URL
-            st.session_state["entra_user"] = parse_user(_token_result)
+            # Verify the ID token signature and store claims; reject forged tokens.
+            try:
+                st.session_state["entra_user"] = parse_user(_token_result)
+            except ValueError as _jwt_err:
+                st.error(f"Token verification failed: {_jwt_err}")
+                if st.button("Try again"):
+                    st.query_params.clear()
+                    st.rerun()
+                st.stop()
             st.query_params.clear()
             st.rerun()
 
         if "entra_user" not in st.session_state:
-            _login_url = get_auth_url()
+            # Generate a fresh per-session nonce and store before redirecting.
+            if "_oauth_state" not in st.session_state:
+                st.session_state["_oauth_state"] = generate_state_nonce()
+            _login_url = get_auth_url(state=st.session_state["_oauth_state"])
             # Override the full page background + hide sidebar for login screen
             st.markdown("""
             <style>
@@ -186,7 +319,7 @@ if not _auth_disabled:
                 f'<div class="login-card">'
 
                 # Client name
-                f'<div class="login-client">NorthStar Retail</div>'
+                f'<div class="login-client">{CLIENT_NAME}</div>'
 
                 # Product mark — diamond + name
                 f'<div class="login-product-mark">'
@@ -216,7 +349,7 @@ if not _auth_disabled:
 
                 # Access note
                 f'<div class="login-access-note">'
-                f'For authorised NorthStar Retail Corp employees only.'
+                f'For authorised {CLIENT_NAME} employees only.'
                 f'</div>'
 
                 f'</div>'  # end card
@@ -224,7 +357,7 @@ if not _auth_disabled:
                 # Global footer — demo disclaimer
                 f'<div class="login-global-footer">'
                 f'DEMO ENVIRONMENT &nbsp;&middot;&nbsp; '
-                f'<span>Fictional client &mdash; NorthStar Retail Corp</span>'
+                f'<span>Fictional client &mdash; {CLIENT_NAME}</span>'
                 f' &nbsp;&middot;&nbsp; Secured by Microsoft Entra ID'
                 f'</div>'
 
@@ -236,7 +369,7 @@ if not _auth_disabled:
         # User is signed in via Entra ID
         _entra_user   = st.session_state["entra_user"]
         _current_user = _entra_user.get("email", "unknown")
-        _current_role = _entra_user.get("role", "viewer")
+        _current_role = "contributor"
         _display_name = _entra_user.get("name") or _current_user
 
     else:
@@ -263,6 +396,25 @@ if not _auth_disabled:
                 st.info("Set `AUTH_DISABLED=1` for local dev or set `ENTRA_TENANT_ID` for SSO.")
                 st.stop()
 
+            # Cookie signing key: env var takes precedence over auth.yaml value.
+            # The auth.yaml value is treated as a dev placeholder only;
+            # production deployments must set AUTH_COOKIE_SECRET.
+            _DEMO_COOKIE_KEY = "bklog_synth_demo_secret_key_2026"
+            _cookie_key = (
+                os.environ.get("AUTH_COOKIE_SECRET")
+                or _auth_cfg["cookie"].get("key", "")
+            )
+            if _cookie_key == _DEMO_COOKIE_KEY and not os.environ.get("AUTH_ALLOW_DEMO_SECRET"):
+                st.error(
+                    "**Insecure configuration:** `config/auth.yaml` contains the "
+                    "default demo cookie secret. Set the `AUTH_COOKIE_SECRET` "
+                    "environment variable to a random secret before deploying. "
+                    "Set `AUTH_ALLOW_DEMO_SECRET=1` to suppress this error in "
+                    "local development only."
+                )
+                st.stop()
+            _auth_cfg["cookie"]["key"] = _cookie_key
+
             _authenticator = stauth.Authenticate(
                 _auth_cfg["credentials"],
                 _auth_cfg["cookie"]["name"],
@@ -286,41 +438,30 @@ if not _auth_disabled:
                 st.stop()
 
             _current_user = _auth_username or "unknown"
-            _user_config  = ((_auth_cfg.get("credentials") or {})
-                             .get("usernames", {}).get(_current_user, {}))
-            _current_role = _user_config.get("role", "viewer")
+            _current_role = "contributor"
 
         except ImportError:
-            st.warning("streamlit-authenticator not installed — running as admin.")
-            _current_role = "admin"
+            st.warning("streamlit-authenticator not installed — running without auth.")
+            _current_role = "contributor"
 
 
 def _is_admin() -> bool:
-    return _current_role == "admin"
-
-
-def _is_contributor() -> bool:
-    return _current_role in ("admin", "contributor")
+    """Admin role removed — all authenticated users are treated as contributor."""
+    return False
 
 
 def _can_run() -> bool:
-    """Contributors and admins can run synthesis; viewers cannot."""
-    return _is_contributor()
+    """All authenticated users can run synthesis."""
+    return True
 
 
 def _can_push_jira() -> bool:
-    # Contributors and admins can push to Jira.
-    # Contributors always go through the mandatory approval gate;
-    # admins can optionally bypass the confirmation checkbox.
-    return _is_contributor()
-
-
-def _can_use_premium_models() -> bool:
-    return _is_admin()
+    """All authenticated users can push to Jira (subject to feature flag)."""
+    return True
 
 
 def _can_use_live_atlassian() -> bool:
-    return _is_admin()
+    return True
 
 
 # CSS already injected above (before auth) — no duplicate needed here.
@@ -370,163 +511,6 @@ def _fmt_tokens(n: int) -> str:
     if n >= 1000:
         return f"{n / 1000:.1f}k"
     return str(n)
-
-
-# Mapping table used by both the audit-log token rollup and the
-# pipeline-card model badge. Accepts BOTH the agent class name
-# ("ParserAgent") and the agent's `.name` attribute ("parser") as input
-# — the audit log records the latter, older history entries the former.
-# Values are the per-stage keys used by `result["models"]`.
-_AGENT_CLASS_TO_STAGE = {
-    # Class-name lookups (legacy history entries).
-    "ParserAgent":         "parser",
-    "ConstraintAgent":     "constraint",
-    "StoryWriterAgent":    "story_writer",
-    "EpicDecomposerAgent": "epic_decomposer",
-    "GapDetectorAgent":    "gap_detector",
-    # Stage-name lookups (audit log + token_usage in current runs).
-    "parser":              "parser",
-    "constraint":          "constraint",
-    "story_writer":        "story_writer",
-    "epic_decomposer":     "epic_decomposer",
-    "gap_detector":        "gap_detector",
-}
-
-
-def _model_for_agent(agent_key: str, models_per_stage: dict) -> str:
-    """Return the model id for the given agent identifier.
-
-    `agent_key` can be either the agent class name (`ParserAgent`) or
-    the agent's `.name` attribute (`parser`). Returns an empty string
-    when neither matches.
-    """
-    stage = _AGENT_CLASS_TO_STAGE.get(agent_key)
-    if stage and models_per_stage:
-        return models_per_stage.get(stage, "")
-    return ""
-
-
-# Output-token budget per stage. These are conservative averages from prior
-# runs on the bundled sample (`samples/meeting_notes.txt`, 30-ticket backlog).
-# Used by the pre-run cost estimator to set expectations BEFORE the user
-# clicks Synthesize. The real bill will swing a bit either way; the sidebar
-# label is prefixed with "≈" to make that clear.
-_PRE_RUN_OUTPUT_BUDGET: dict[str, int] = {
-    "parser":          1500,
-    "constraint":      1200,
-    "story_writer":    4500,
-    "epic_decomposer": 3000,
-    "gap_detector":    2500,
-}
-
-
-def _estimate_pre_run_cost(
-    *,
-    transcript_choice: str,
-    transcript_upload,
-    constraints_choice: str,
-    constraints_upload,
-    backlog_choice: str,
-    backlog_upload,
-    models: dict[str, str],
-) -> tuple[float, int, int]:
-    """Estimate $ cost + input/output tokens before a run.
-
-    Each stage only sees the inputs it actually consumes:
-        parser           → transcript
-        constraint       → constraints
-        story_writer     → parser-output + constraint-output (we treat
-                           these as the upstream agents' output budgets)
-        epic_decomposer  → story-writer-output
-        gap_detector     → story-writer-output + backlog
-
-    This corrects an earlier draft that summed transcript+constraints+
-    backlog and fed the lump into every stage — which double-counted
-    inputs and pushed the estimate up by ~3x.
-
-    `~4 chars per English token` is the standard back-of-envelope
-    ratio. Output token budgets come from `_PRE_RUN_OUTPUT_BUDGET`,
-    measured on prior runs of the bundled sample.
-    """
-    def _chars_of(selected, options: dict, upload) -> int:
-        labels = selected if isinstance(selected, list) else ([selected] if selected else [])
-        total = 0
-        for lbl in labels:
-            val = options.get(lbl)
-            if val and val != "__upload__":
-                try:
-                    total += Path(str(val)).stat().st_size
-                except OSError:
-                    pass
-        # Uploads are always combined with the selected samples now.
-        ups = upload if isinstance(upload, list) else ([upload] if upload else [])
-        total += sum(int(getattr(u, "size", 0) or 0) for u in ups)
-        return total
-
-    transcript_chars = _chars_of(transcript_choice, TRANSCRIPT_OPTIONS, transcript_upload)
-    constraint_chars = _chars_of(constraints_choice, CONSTRAINTS_OPTIONS, constraints_upload)
-    backlog_chars = _chars_of(backlog_choice, BACKLOG_OPTIONS, backlog_upload)
-
-    transcript_tokens = transcript_chars // 4
-    constraint_tokens = constraint_chars // 4
-    backlog_tokens = backlog_chars // 4
-
-    # Per-stage input tokens, mapping what each agent actually reads.
-    parser_in       = transcript_tokens
-    constraint_in   = constraint_tokens
-    story_writer_in = _PRE_RUN_OUTPUT_BUDGET["parser"] + _PRE_RUN_OUTPUT_BUDGET["constraint"]
-    epic_in         = _PRE_RUN_OUTPUT_BUDGET["story_writer"]
-    # The Gap Detector sees stories + a sample of the backlog (the
-    # vector store caps at ~5 candidates per story, but for a pre-run
-    # estimate we model the entire backlog as input to be safe).
-    gap_in          = _PRE_RUN_OUTPUT_BUDGET["story_writer"] + backlog_tokens
-
-    stage_inputs = {
-        "parser":           parser_in,
-        "constraint":       constraint_in,
-        "story_writer":     story_writer_in,
-        "epic_decomposer":  epic_in,
-        "gap_detector":     gap_in,
-    }
-
-    total_in = 0
-    total_out = 0
-    total_cost = 0.0
-    for stage, output_tokens in _PRE_RUN_OUTPUT_BUDGET.items():
-        model = (models or {}).get(stage) or ""
-        if not model:
-            continue
-        input_tokens = stage_inputs.get(stage, 0)
-        c = estimate_cost_usd(model, input_tokens, output_tokens)
-        if c is None:
-            continue
-        total_in += input_tokens
-        total_out += output_tokens
-        total_cost += c
-
-    return total_cost, total_in, total_out
-
-
-def _compute_total_cost(token_usage: dict, models_per_stage: dict) -> float:
-    """Sum per-agent costs using each agent's stage model rate.
-
-    Skips the `total` row (it's the input/output sum, not a per-agent
-    row). Returns 0.0 when no per-agent rows are present or no models
-    are known.
-    """
-    total = 0.0
-    if not token_usage:
-        return 0.0
-    for agent_key, vals in token_usage.items():
-        if agent_key == "total":
-            continue
-        ai = int((vals or {}).get("input", 0) or 0)
-        ao = int((vals or {}).get("output", 0) or 0)
-        model = _model_for_agent(agent_key, models_per_stage)
-        c = estimate_cost_usd(model, ai, ao) if model else None
-        if c is not None:
-            total += c
-    return total
 
 
 def _render_pipeline(
@@ -892,111 +876,6 @@ def _render_epics_tab(result: dict) -> None:
         st.markdown("".join(ep_html), unsafe_allow_html=True)
 
 
-def _render_compare_banner(
-    summary: dict,
-    labels: dict,
-    result: dict,
-) -> None:
-    """Render a compact two-column summary of a compare-mode run.
-
-    Built to be quickly scannable: each row is one metric, with the two
-    providers side-by-side and a delta arrow. The full secondary
-    synthesis is one click away via the "View secondary" expander.
-    """
-    primary_lbl = labels.get("primary", "A")
-    secondary_lbl = labels.get("secondary", "B")
-    pc = summary.get("primary") or {}
-    sc = summary.get("secondary") or {}
-    deltas = summary.get("deltas") or {}
-
-    rows = [
-        ("Epics", "epics"),
-        ("Stories", "stories"),
-        ("Gaps", "gaps"),
-        ("Conflicts", "conflicts"),
-        ("Duplicates", "duplicates"),
-        ("Guardrail findings", "guardrail_findings"),
-        ("Input tokens", "input_tokens"),
-        ("Output tokens", "output_tokens"),
-    ]
-
-    table_rows = []
-    for label, key in rows:
-        p_val = pc.get(key, 0)
-        s_val = sc.get(key, 0)
-        d = deltas.get(key, 0)
-        if d == 0:
-            delta_html = '<span style="color:var(--text-faint);">=</span>'
-        elif d > 0:
-            delta_html = f'<span style="color:var(--green);">▲ +{d:,}</span>'
-        else:
-            delta_html = f'<span style="color:var(--rose);">▼ {d:,}</span>'
-        table_rows.append(
-            f'<tr>'
-            f'<td style="color:var(--text-muted);font-weight:600;">{_esc(label)}</td>'
-            f'<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;">{p_val:,}</td>'
-            f'<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;">{s_val:,}</td>'
-            f'<td style="text-align:right;">{delta_html}</td>'
-            f'</tr>'
-        )
-
-    overlap_pct = summary.get("title_overlap_pct", 0.0)
-    st.markdown(
-        f'<div style="margin:0.6rem 0 1rem;padding:1rem 1.2rem;'
-        f'background:var(--bg-elev-1);border:1px solid var(--violet);'
-        f'border-radius:12px;">'
-        f'<div style="display:flex;align-items:baseline;justify-content:space-between;'
-        f'margin-bottom:0.7rem;">'
-        f'<span style="font-size:0.62rem;font-weight:700;letter-spacing:0.14em;'
-        f'text-transform:uppercase;color:var(--violet);">Compare mode</span>'
-        f'<span style="font-size:0.78rem;color:var(--text-muted);">'
-        f'<strong style="color:var(--text);">{overlap_pct}%</strong> story-title overlap'
-        f'</span></div>'
-        f'<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
-        f'<thead><tr style="border-bottom:1px solid var(--border);">'
-        f'<th style="text-align:left;padding-bottom:0.3rem;color:var(--text-faint);'
-        f'font-weight:700;font-size:0.7rem;letter-spacing:0.06em;">METRIC</th>'
-        f'<th style="text-align:right;padding-bottom:0.3rem;color:var(--accent);'
-        f'font-weight:700;font-size:0.7rem;">{_esc(primary_lbl)}</th>'
-        f'<th style="text-align:right;padding-bottom:0.3rem;color:var(--violet);'
-        f'font-weight:700;font-size:0.7rem;">{_esc(secondary_lbl)}</th>'
-        f'<th style="text-align:right;padding-bottom:0.3rem;color:var(--text-faint);'
-        f'font-weight:700;font-size:0.7rem;">Δ</th>'
-        f'</tr></thead>'
-        f'<tbody>{"".join(table_rows)}</tbody></table>'
-        f'<div style="margin-top:0.6rem;font-size:0.75rem;color:var(--text-faint);">'
-        f'The detailed view below shows the <strong style="color:var(--accent);">'
-        f'{_esc(primary_lbl)}</strong> run. Expand the section below to inspect '
-        f'<strong style="color:var(--violet);">{_esc(secondary_lbl)}</strong>.'
-        f'</div></div>',
-        unsafe_allow_html=True,
-    )
-
-    # Secondary synthesis — collapsible, shows headlines + downloads only.
-    secondary = result.get("_compare_secondary")
-    if secondary:
-        with st.expander(f"View {secondary_lbl} run details", expanded=False):
-            sec_epics = secondary.get("epics") or []
-            sec_stories = sum(len(e.get("stories") or []) for e in sec_epics)
-            st.caption(
-                f"{secondary_lbl} produced {len(sec_epics)} epic(s) with "
-                f"{sec_stories} stor{'y' if sec_stories == 1 else 'ies'}, "
-                f"{len(secondary.get('duplicates') or [])} dup(s), "
-                f"{len(secondary.get('conflicts') or [])} conflict(s)."
-            )
-            sec_json = json.dumps(
-                {k: v for k, v in secondary.items() if not k.startswith("_")},
-                indent=2,
-            )
-            st.download_button(
-                f"↓  synthesis_{secondary_lbl.lower()}.json",
-                sec_json,
-                file_name=f"synthesis_{secondary_lbl.lower()}.json",
-                mime="application/json",
-            )
-            st.markdown("**Audit trail (secondary):**")
-            st.markdown(secondary.get("audit_trail", "_No audit trail captured._"))
-
 
 def _render_guardrails_tab(result: dict) -> None:
     """Render the post-LLM guardrail findings, grouped by severity.
@@ -1221,298 +1100,6 @@ def show_duplicate_compare_dialog(focus_index: int = 0) -> None:
         )
 
 
-# ------------------------------------------------------- run history I/O
-
-RUNS_DIR = ROOT / "logs" / "runs"
-
-
-def _user_runs_dir(user_id: str) -> Path:
-    """Per-user run history directory: logs/runs/<safe_user_id>/"""
-    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in (user_id or "anonymous"))
-    return RUNS_DIR / safe
-
-
-def _save_run_to_disk(summary: dict[str, Any]) -> Path:
-    """Write summary JSON scoped to the current user: logs/runs/<user_id>/<stamp>_<id>.json"""
-    user_id = summary.get("user_id", "anonymous")
-    user_dir = _user_runs_dir(user_id)
-    user_dir.mkdir(parents=True, exist_ok=True)
-    short_id = uuid.uuid4().hex[:6]
-    stamp = summary.get("timestamp") or datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = user_dir / f"{stamp}_{short_id}.json"
-    try:
-        path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    except OSError as e:
-        st.warning(f"Could not save run history: {e}")
-    return path
-
-
-def _load_run_history() -> list[dict[str, Any]]:
-    """Load run history scoped by role:
-    - admin: sees ALL users' runs
-    - contributor/viewer: sees only their own runs
-    """
-    if not RUNS_DIR.exists():
-        return []
-    entries: list[dict[str, Any]] = []
-
-    # Admins scan all user subdirectories; others scan only their own
-    try:
-        current_role = st.session_state.get("entra_user", {}).get("role") \
-            or st.session_state.get("authentication_status") and \
-            __import__("yaml").safe_load(
-                (ROOT / "config" / "auth.yaml").read_text()
-            ).get("credentials", {}).get("usernames", {}) \
-               .get(st.session_state.get("username", ""), {}).get("role", "viewer") \
-            or "viewer"
-    except Exception:  # noqa: BLE001
-        current_role = "viewer"
-
-    is_admin_user = (current_role == "admin")
-
-    if is_admin_user:
-        # Admins see all runs across all users
-        search_dirs = [d for d in RUNS_DIR.iterdir() if d.is_dir()] if RUNS_DIR.exists() else []
-        search_dirs += [RUNS_DIR]  # also legacy flat structure
-    else:
-        # Non-admins see only their own runs
-        current_uid = (st.session_state.get("entra_user") or {}).get("email") \
-            or st.session_state.get("username") or "anonymous"
-        search_dirs = [_user_runs_dir(current_uid)]
-
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        for p in d.glob("*.json"):
-            try:
-                entries.append(json.loads(p.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError):
-                continue
-
-    entries.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
-    return entries
-
-
-@st.dialog("Run history", width="large")
-def show_run_history_dialog() -> None:
-    """Modal: list past runs from logs/runs/*.json with a "Load" button each.
-
-    Polish over the v1 dialog: free-text search, date-bucket grouping
-    (Today / Yesterday / This week / Older), per-row delete, and a small
-    aggregate strip showing total runs + total spend across history.
-    """
-    history = _load_run_history()
-    if not history:
-        st.markdown(
-            '<div style="padding: 1.4rem; text-align: center; color: var(--text-muted);">'
-            'No persisted runs yet. After your next synthesis completes, this '
-            'list will populate from <code>logs/runs/</code>.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    # ---- Aggregate strip (total runs + cumulative cost) ----
-    total_cost = 0.0
-    total_stories = 0
-    for h in history:
-        try:
-            total_cost += float(h.get("cost_usd") or 0)
-        except (TypeError, ValueError):
-            pass
-        total_stories += int(h.get("story_count") or h.get("n_stories") or 0)
-
-    st.markdown(
-        '<div style="display:flex;gap:0.6rem;margin-bottom:0.85rem;">'
-        f'<div class="rh-summary-chip"><span>Runs</span>{len(history)}</div>'
-        f'<div class="rh-summary-chip"><span>Stories drafted</span>{total_stories}</div>'
-        f'<div class="rh-summary-chip"><span>Total est. cost</span>${total_cost:.4f}</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ---- Search / filter ----
-    query = st.text_input(
-        "Filter",
-        placeholder="Search by source name, model, or timestamp…",
-        key="rh_search",
-        label_visibility="collapsed",
-    ).strip().lower()
-
-    if query:
-        filtered = [
-            h for h in history
-            if query in (h.get("source_label") or "").lower()
-            or query in (h.get("model") or "").lower()
-            or query in (h.get("timestamp") or "").lower()
-        ]
-    else:
-        filtered = history
-
-    if not filtered:
-        st.caption(f"No matches for '{query}'. Clear the filter to see all runs.")
-        return
-
-    # ---- Bucket by recency ----
-    now = datetime.now()
-    buckets: dict[str, list[dict]] = {"Today": [], "Yesterday": [], "This week": [], "Older": []}
-    for entry in filtered:
-        stamp = entry.get("timestamp", "")
-        try:
-            dt = datetime.strptime(stamp, "%Y%m%d_%H%M%S")
-        except (ValueError, TypeError):
-            buckets["Older"].append(entry)
-            continue
-        delta_days = (now.date() - dt.date()).days
-        if delta_days == 0:
-            buckets["Today"].append(entry)
-        elif delta_days == 1:
-            buckets["Yesterday"].append(entry)
-        elif delta_days <= 7:
-            buckets["This week"].append(entry)
-        else:
-            buckets["Older"].append(entry)
-
-    current_run_id = (st.session_state.get("run_dir") or "").name \
-        if hasattr(st.session_state.get("run_dir") or "", "name") else ""
-
-    for bucket_name, entries in buckets.items():
-        if not entries:
-            continue
-        st.markdown(
-            f'<div style="font-size:0.66rem;font-weight:700;letter-spacing:0.16em;'
-            f'text-transform:uppercase;color:var(--text-faint);'
-            f'margin:1rem 0 0.55rem;">{bucket_name} · {len(entries)}</div>',
-            unsafe_allow_html=True,
-        )
-        for entry in entries:
-            _render_history_row(entry, current_run_id)
-
-
-def _render_history_row(entry: dict, current_run_id: str) -> None:
-    """One run card inside the history dialog. Factored out so the buckets
-    above can iterate without nesting columns inside columns."""
-    stamp = entry.get("timestamp", "—")
-    try:
-        dt = datetime.strptime(stamp, "%Y%m%d_%H%M%S")
-        date_label = dt.strftime("%b %d, %Y · %H:%M:%S")
-    except (ValueError, TypeError):
-        date_label = stamp
-
-    run_id = entry.get("run_id", stamp)
-    is_current = bool(current_run_id) and current_run_id == run_id
-
-    cols = st.columns([5, 1, 1])
-    with cols[0]:
-        chips = []
-        for label, val in (
-            ("epics", entry.get("epic_count") or entry.get("n_epics") or 0),
-            ("stories", entry.get("story_count") or entry.get("n_stories") or 0),
-            ("dups", entry.get("dup_count") or entry.get("n_dups") or 0),
-            ("elapsed", f"{float(entry.get('elapsed_seconds', 0) or 0):.1f}s"),
-            ("model", entry.get("model") or "—"),
-        ):
-            chips.append(f'<span class="rh-chip">{_esc(label)}={_esc(val)}</span>')
-        cost = entry.get("cost_usd")
-        if cost is not None:
-            try:
-                chips.append(f'<span class="rh-chip rh-chip-accent">${float(cost):.4f}</span>')
-            except (TypeError, ValueError):
-                pass
-        current_badge = (
-            '<span class="rh-chip rh-chip-current">⌖ current</span>'
-            if is_current else ""
-        )
-        card_cls = "rh-card rh-card-current" if is_current else "rh-card"
-        st.markdown(
-            f'<div class="{card_cls}">'
-            f'<div class="rh-card-top">'
-            f'<div><div class="rh-card-date">{_esc(date_label)}{current_badge}</div>'
-            f'<div class="rh-card-source">{_esc(entry.get("source_label", "—"))}</div></div>'
-            f'</div>'
-            f'<div class="rh-card-meta">{"".join(chips)}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    with cols[1]:
-        if st.button("Load", key=f"history_load_{run_id}", use_container_width=True,
-                     disabled=is_current,
-                     help="Already loaded" if is_current else "Re-open this run"):
-            _load_history_into_state(entry)
-            st.rerun()
-    with cols[2]:
-        if st.button("✕", key=f"history_delete_{run_id}", use_container_width=True,
-                     help="Delete this run's metadata file (output files are kept)."):
-            _delete_history_entry(entry)
-            st.rerun()
-
-
-def _delete_history_entry(entry: dict) -> None:
-    """Remove a single run's metadata JSON from logs/runs/.
-
-    We delete only the metadata file — the corresponding `outputs/<stamp>/`
-    directory is kept so the synthesis artefacts aren't lost on a stray
-    click. If the user wants a clean wipe, that's a shell rm.
-    """
-    run_id = entry.get("run_id") or entry.get("timestamp", "")
-    if not run_id:
-        return
-    # Search all user subdirectories for the run file
-    deleted = 0
-    if not RUNS_DIR.exists():
-        st.toast(f"No metadata file found for run {run_id}", icon="⚠️")
-        return
-    search_dirs = [RUNS_DIR] + [d for d in RUNS_DIR.iterdir() if d.is_dir()]
-    for d in search_dirs:
-        for p in d.glob(f"{run_id}*.json"):
-            try:
-                p.unlink()
-                deleted += 1
-            except OSError:
-                pass
-    if deleted:
-        st.toast(f"Deleted run metadata · {deleted} file(s)", icon="🗑️")
-    else:
-        st.toast(f"No metadata file found for run {run_id}", icon="⚠️")
-
-
-def _load_history_into_state(entry: dict[str, Any]) -> None:
-    """Restore a saved run's outputs into session_state for re-display."""
-    outputs = entry.get("outputs", {}) or {}
-    synth_path = outputs.get("synthesis_json")
-    if synth_path:
-        p = Path(synth_path)
-        if p.exists():
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
-                st.error(f"Could not load run outputs: {e}")
-                return
-            # The historical synthesis.json doesn't carry audit_trail —
-            # try to read the sibling file.
-            audit_md = p.parent / "audit_trail.md"
-            if audit_md.exists():
-                data["audit_trail"] = audit_md.read_text(encoding="utf-8")
-            data.setdefault("token_usage", entry.get("token_usage") or {})
-            data.setdefault("model", entry.get("model") or "")
-            st.session_state.result = data
-            st.session_state.run_dir = p.parent
-            st.session_state.elapsed = entry.get("elapsed_seconds") or 0
-            st.session_state.source_label = entry.get("source_label") or ""
-            st.session_state.stage_states = ["done"] * len(_STAGES)
-            st.session_state.tokens_total = (
-                (entry.get("token_usage") or {}).get("total", {}).get("input", 0)
-                + (entry.get("token_usage") or {}).get("total", {}).get("output", 0)
-            )
-            st.session_state.cost_usd = entry.get("cost_usd") or 0
-            st.session_state.model_used = entry.get("model") or ""
-            st.session_state.epics_original = json.loads(json.dumps(data.get("epics") or []))
-            # Reset transient UI state so a loaded historical run renders
-            # cleanly: drop any stale dry-run preview and edit-mode flag.
-            st.session_state.dry_run_result = None
-            st.session_state.stories_edit_mode = False
-
-
 # -------------------------------------------------------- session state
 
 if "result" not in st.session_state:
@@ -1542,8 +1129,7 @@ if "existing_tickets_cache" not in st.session_state:
     # Stored so the duplicate compare dialog can look up backlog rows.
     st.session_state.existing_tickets_cache = []
 if "dry_run_result" not in st.session_state:
-    # Holds the dry-run prompts + source preview for rendering on the canvas.
-    st.session_state.dry_run_result = None
+    st.session_state.dry_run_result = None  # kept for history-load compat
 
 
 # -------------------------------------------------------- model presets
@@ -1556,13 +1142,13 @@ if "dry_run_result" not in st.session_state:
 MODEL_PRESETS: dict[str, dict[str, str]] = {
     "local": {
         # Free local models (Ollama) for the mechanical stages;
-        # Claude for the two reasoning-heavy stages.
+        # Gemini Flash for the two reasoning-heavy stages.
         # Requires: ollama serve + ollama pull llama3.2:3b
         "parser":          "ollama/llama3.2:3b",
         "constraint":      "ollama/llama3.2:3b",
-        "story_writer":    "claude-sonnet-4-5",
+        "story_writer":    "gemini-2.5-flash",
         "epic_decomposer": "ollama/llama3.2:3b",
-        "gap_detector":    "claude-sonnet-4-5",
+        "gap_detector":    "gemini-2.5-flash",
     },
     "free": {
         "parser":          "gemini-2.5-flash",
@@ -1618,7 +1204,14 @@ STAGE_KEYS = ("parser", "constraint", "story_writer", "epic_decomposer", "gap_de
 # Streamlit doesn't keep selectbox / preset state across a hard browser
 # reload (new session). We mirror a small subset of the state to a JSON
 # file so reopening the tab restores the user's last picks.
-UI_STATE_FILE = ROOT / "logs" / ".ui_state.json"
+#
+# Under Docker with multiple replicas each pod gets its own file keyed by
+# HOSTNAME so concurrent writes never race — pod A's preferences never
+# overwrite pod B's.  Within a pod, os.replace() gives an atomic write so
+# a Streamlit rerun (main-thread re-execution) can't produce a torn file.
+import socket as _socket
+_POD_ID = os.environ.get("HOSTNAME", _socket.gethostname()).replace("/", "_")
+UI_STATE_FILE = LOGS_DIR / f".ui_state_{_POD_ID}.json"
 
 
 def _load_ui_state() -> dict:
@@ -1633,7 +1226,11 @@ def _load_ui_state() -> dict:
 def _save_ui_state(state: dict) -> None:
     try:
         UI_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        UI_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        # Write to a temp file then atomically replace the target so a
+        # concurrent read never sees a half-written file.
+        _tmp = UI_STATE_FILE.with_suffix(f".{os.getpid()}.tmp")
+        _tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        _tmp.replace(UI_STATE_FILE)
     except OSError:
         pass  # non-critical
 
@@ -1765,16 +1362,12 @@ with st.sidebar:
 
     # ── Profile panel — expandable like Azure Portal / Microsoft 365 ──────────
     if not _auth_disabled and (_entra_enabled() or _authenticator is not None):
-        _role_color  = {"admin": "var(--rose)", "contributor": "var(--accent)", "viewer": "var(--text-faint)"}.get(_current_role, "var(--text-faint)")
+        _role_color  = "var(--accent)"
         _show_name   = _display_name if _entra_enabled() else _current_user
         _show_email  = _current_user if _entra_enabled() else ""
-        _org         = "NorthStar Retail Corp" if _entra_enabled() else "Local"
+        _org         = CLIENT_NAME if _entra_enabled() else "Local"
         _auth_method = "Microsoft Entra ID" if _entra_enabled() else "Username / Password"
-        _role_desc   = {
-            "admin": "Full access · Live integrations · Admin settings",
-            "contributor": "Run synthesis · Push to Jira · View history",
-            "viewer": "View results · Download exports only",
-        }.get(_current_role, "")
+        _role_desc   = "Run synthesis · Push to Jira · View history"
 
         # Profile header — always visible, click to expand/collapse
         _profile_open = st.session_state.get("_profile_open", False)
@@ -1865,89 +1458,14 @@ with st.sidebar:
             elif _authenticator is not None:
                 _authenticator.logout(button_name="Log out", location="sidebar", key="sidebar_logout")
 
-    # ── Usage meter (rate limit) ────────────────────────────────────────────
-    if _can_run():
-        try:
-            _usage = get_usage_summary(_current_user)
-            _hr_pct = min(100, int(100 * _usage["runs_last_hour"] / max(1, _usage["max_runs_per_hour"])))
-            _day_pct = min(100, int(100 * _usage["cost_today_usd"] / max(0.01, _usage["max_cost_per_day_usd"])))
-            _hr_color = "var(--rose)" if _hr_pct >= 80 else "var(--accent)"
-            _day_color = "var(--rose)" if _day_pct >= 80 else "var(--accent)"
-            st.markdown(
-                f'<div style="padding:0.4rem 0.6rem;background:var(--bg-elev-1);'
-                f'border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;font-size:0.75rem;">'
-                f'<div style="display:flex;justify-content:space-between;color:var(--text-faint);margin-bottom:0.25rem;">'
-                f'<span>Runs/hr</span><span style="color:{_hr_color};">'
-                f'{_usage["runs_last_hour"]}/{_usage["max_runs_per_hour"]}</span></div>'
-                f'<div style="height:3px;background:var(--border);border-radius:2px;margin-bottom:0.3rem;">'
-                f'<div style="height:3px;width:{_hr_pct}%;background:{_hr_color};border-radius:2px;"></div></div>'
-                f'<div style="display:flex;justify-content:space-between;color:var(--text-faint);">'
-                f'<span>Cost today</span><span style="color:{_day_color};">'
-                f'${_usage["cost_today_usd"]:.3f}/${_usage["max_cost_per_day_usd"]:.2f}</span></div>'
-                f'<div style="height:3px;background:var(--border);border-radius:2px;margin-top:0.25rem;">'
-                f'<div style="height:3px;width:{_day_pct}%;background:{_day_color};border-radius:2px;"></div></div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        except Exception:  # noqa: BLE001 — usage meter must never block the UI
-            pass
-
-    # ── Admin: Feature Flags settings button ───────────────────────────────
-    # Note: show_admin_settings_dialog is defined LATER in the file. We set a
-    # session state flag here and call the dialog after its definition below.
-    if _is_admin():
-        if st.button("⚙  Admin Settings", use_container_width=True,
-                     key="admin_settings_btn", help="Configure what contributors can do"):
-            st.session_state["_trigger_admin_settings"] = True
 
     # ── Show startup warnings if any ───────────────────────────────────────
     for _w in _startup_warnings:
         st.warning(_w, icon="⚠️")
 
-    # ── ROLE-GATED SIDEBAR CONTENT ─────────────────────────────────────────
-    # Viewer:      read-only panel + browse history only
-    # Contributor: inputs + models (Free/Balanced) + synthesize + advanced
-    # Admin:       everything above + Live Atlassian + Local/Premium + per-stage override
-
-    if not _can_run():
-        # ── VIEWER ───────────────────────────────────────────────────────────
-        st.markdown(
-            '<div style="padding:0.8rem 1rem;background:var(--bg-elev-1);'
-            'border:1px solid var(--border);border-left:3px solid var(--text-faint);'
-            'border-radius:8px;margin-bottom:0.7rem;">'
-            '<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.14em;'
-            'text-transform:uppercase;color:var(--text-faint);margin-bottom:0.35rem;">'
-            'View-only access</div>'
-            '<div style="font-size:0.82rem;color:var(--text-muted);line-height:1.5;">'
-            'Your role (<strong style="color:var(--text);">viewer</strong>) lets you '
-            'read results and download exports.<br><br>'
-            'To run synthesis or push to Jira, ask an admin to upgrade your role to '
-            '<strong>contributor</strong>.</div></div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("⌕  Browse run history", use_container_width=True, key="viewer_history_btn"):
-            show_run_history_dialog()
-        # Safe defaults — referenced by the run handler below the sidebar.
-        transcript_choice = []
-        transcript_upload = None
-        constraints_choice = []
-        constraints_upload = None
-        backlog_choice = []
-        backlog_upload = None
-        vision_samples = []
-        vision_uploads = []
-        run_clicked = False
-        redact_pii = True
-        dry_run = False
-        auto_switch = False
-        compare_enabled = False
-        compare_with_preset = "free"
-        use_live_confluence = False
-        use_live_jira = False
-        live_confluence_page_id = ""
-
-    else:
-        # ── CONTRIBUTOR / ADMIN: INPUTS ───────────────────────────────────────
+    # ── INPUTS ─────────────────────────────────────────────────────────────
+    if True:
+        # ── INPUTS ───────────────────────────────────────────────────────────
         _saved_transcript = _default_multi("transcript_choice", TRANSCRIPT_OPTIONS)
         with st.expander(
             _expander_label("📝 Transcript", _saved_transcript, empty_hint="pick a source"),
@@ -1966,7 +1484,7 @@ with st.sidebar:
                 accept_multiple_files=True, key="transcript_upload",
                 help="Optional — combined with any samples selected above.",
             )
-            if _ff.is_enabled(_current_role, "vision_input"):
+            if True:
                 st.caption("**📷 Whiteboard / vision**")
                 vision_samples = st.multiselect(
                     "Vision samples",
@@ -2022,13 +1540,11 @@ with st.sidebar:
                 help="Merged with any backlog samples selected above.",
             )
 
-        # ── ADMIN ONLY: Live Atlassian ────────────────────────────────────────
-        # Completely hidden for contributors unless live_jira_read flag is on.
+        # ── Live Atlassian ────────────────────────────────────────────────────
         use_live_confluence = False
         use_live_jira = False
         live_confluence_page_id = ""
-        _contributor_live_jira = _ff.is_enabled(_current_role, "live_jira_read")
-        if _is_admin() or _contributor_live_jira:
+        if True:
             _live_conf_active = bool(st.session_state.get("use_live_confluence"))
             _live_jira_active = bool(st.session_state.get("use_live_jira"))
             _live_label = "☁ Live Atlassian" + (" — active" if (_live_conf_active or _live_jira_active) else "")
@@ -2058,8 +1574,7 @@ with st.sidebar:
         st.markdown("### Models")
         _label_to_key = {"Local": "local", "Free": "free", "Balanced": "balanced", "Premium": "premium"}
         _key_to_label = {v: k for k, v in _label_to_key.items()}
-        # Allowed presets come from feature_flags for contributor; admin always gets all four.
-        _allowed_preset_keys = _ff.allowed_presets(_current_role)
+        _allowed_preset_keys = list(MODEL_PRESETS.keys())
         # Hide "Local" preset when Ollama binary is not installed (e.g. on Azure).
         import shutil as _shutil
         _ollama_installed = bool(_shutil.which("ollama"))
@@ -2173,10 +1688,9 @@ with st.sidebar:
             key="preset_radio",
             help=(
                 "Free: all Gemini Flash · free tier.  "
-                "Balanced: Gemini Flash + Claude Sonnet for Story Writer & Gap Detector."
-                + ("  Local: Ollama + Claude for reasoning · run ./start.sh to auto-start."
-                   "  Premium: all Claude Sonnet."
-                   if _is_admin() else "")
+                "Balanced: Gemini Flash + Claude Sonnet for Story Writer & Gap Detector.  "
+                "Local: Ollama + Claude for reasoning · run ./start.sh to auto-start.  "
+                "Premium: all Claude Sonnet."
             ),
         )
         _picked_key = _label_to_key.get(_picked_label, "balanced")
@@ -2248,210 +1762,55 @@ with st.sidebar:
                     f"**{_picked_label} preset not available** — {_sel_reason}. {_fix_hint}"
                 )
 
-        # ── ADMIN ONLY: Per-stage model override ──────────────────────────────
-        if _is_admin():
-            with st.expander("⚙ Per-stage override", expanded=False):
-                # Toggle guards the selects so the admin can't accidentally
-                # change a stage while just browsing what the preset uses.
-                _override_enabled = st.toggle(
-                    "Enable per-stage override",
-                    value=bool(st.session_state.get("_stage_override_enabled", False)),
-                    key="_stage_override_enabled",
-                    help="Turn on to customise individual stage models. "
-                         "Turn off to lock all stages back to the selected preset.",
-                )
-                if not _override_enabled:
-                    # Reset models to preset AND clear widget state so turning
-                    # override back ON starts fresh from the preset, not stale values.
-                    _cur_active = st.session_state.active_preset
-                    if _cur_active in MODEL_PRESETS:
-                        st.session_state.models = dict(MODEL_PRESETS[_cur_active])
-                    for _s in STAGE_KEYS:
-                        st.session_state.pop(f"model_pick_{_s}", None)
-
-                    # Show a read-only summary so the user can confirm what each
-                    # stage will use before running.
-                    _stage_names = {
-                        "parser": "Parser", "constraint": "Constraint Extractor",
-                        "story_writer": "Story Writer", "epic_decomposer": "Epic Decomposer",
-                        "gap_detector": "Gap Detector",
-                    }
-                    _rows = "".join(
-                        f'<div style="display:flex;justify-content:space-between;'
-                        f'padding:2px 0;font-size:0.78rem;">'
-                        f'<span style="color:var(--text-faint);">{_stage_names[_s]}</span>'
-                        f'<span style="color:var(--text);font-family:\'IBM Plex Mono\',monospace;">'
-                        f'{_esc(st.session_state.models.get(_s,"—"))}</span></div>'
-                        for _s in STAGE_KEYS
-                    )
-                    st.markdown(
-                        f'<div style="background:var(--bg-elev-2);border:1px solid var(--border);'
-                        f'border-radius:8px;padding:8px 12px;margin:4px 0;">'
-                        f'<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.1em;'
-                        f'text-transform:uppercase;color:var(--text-faint);margin-bottom:6px;">'
-                        f'{_esc(_cur_active.title())} preset — all stages</div>'
-                        + _rows + '</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    _stage_labels = {
-                        "parser": "Parser", "constraint": "Constraint Extractor",
-                        "story_writer": "Story Writer", "epic_decomposer": "Epic Decomposer",
-                        "gap_detector": "Gap Detector",
-                    }
-
-                    # Build labelled model options with live availability badges.
-                    # Checks: Anthropic key, Google key, Ollama running + model pulled.
-                    try:
-                        from ollama_manager import list_models as _list_ollama
-                        _pulled = {f"ollama/{m}" for m in _list_ollama()}
-                    except Exception:
-                        _pulled = {"ollama/llama3.2:3b"} if _ollama_ok else set()
-
-                    def _model_label(mid: str) -> str:
-                        """Return display label with plain-text availability tag."""
-                        if mid.startswith("claude"):
-                            tag = "[ready]" if _has_anthropic else "[no ANTHROPIC key]"
-                        elif mid.startswith("gemini"):
-                            if not _has_google:
-                                tag = "[no GOOGLE key]"
-                            elif mid == "gemini-2.5-pro":
-                                tag = "[ready - paid tier]"
-                            else:
-                                tag = "[ready]"
-                        elif mid.startswith("ollama"):
-                            if not _ollama_ok:
-                                tag = "[Ollama offline]"
-                            elif mid in _pulled:
-                                tag = "[ready]"
-                            else:
-                                model_name = mid.replace("ollama/", "")
-                                tag = f"[not pulled - run: ollama pull {model_name}]"
-                        else:
-                            tag = "[ready]"
-                        return f"{mid}  {tag}"
-
-                    # Build the labelled list and a reverse mapping to raw model id.
-                    _labelled_opts = [_model_label(m) for m in MODEL_OPTIONS]
-                    _label_to_model = {lbl: mid for lbl, mid in zip(_labelled_opts, MODEL_OPTIONS)}
-
-                    for _stage in STAGE_KEYS:
-                        _cur = st.session_state.models.get(_stage, MODEL_PRESETS["balanced"][_stage])
-                        # Find the labelled version of the current model.
-                        _cur_lbl = next(
-                            (lbl for lbl, mid in _label_to_model.items() if mid == _cur),
-                            _labelled_opts[0],
-                        )
-                        _spicked_lbl = st.selectbox(
-                            _stage_labels[_stage],
-                            options=_labelled_opts,
-                            index=_labelled_opts.index(_cur_lbl),
-                            key=f"model_pick_{_stage}",
-                        )
-                        _spicked = _label_to_model.get(_spicked_lbl, _cur)
-                        # Warn if the picked model is not available.
-                        if "[ready]" not in _spicked_lbl:
-                            _issue = _spicked_lbl.split("  [")[1].rstrip("]")
-                            st.caption(f"⚠  {_issue}")
-                        if _spicked != _cur:
-                            st.session_state.models[_stage] = _spicked
-                            _matches = next(
-                                (n for n, mp in MODEL_PRESETS.items() if mp == st.session_state.models),
-                                None,
-                            )
-                            st.session_state.active_preset = _matches or "custom"
-
-                    # ── Active configuration summary ──────────────────────────
-                    # Shows every stage's current model. Stages that differ from
-                    # the base preset are highlighted so the admin can quickly
-                    # confirm which overrides are active before running.
-                    st.divider()
-                    _base_preset_key = st.session_state.active_preset
-                    _base = dict(MODEL_PRESETS.get(_base_preset_key, MODEL_PRESETS["balanced"]))
-                    _stage_display_names = {
-                        "parser": "Parser", "constraint": "Constraint Extractor",
-                        "story_writer": "Story Writer", "epic_decomposer": "Epic Decomposer",
-                        "gap_detector": "Gap Detector",
-                    }
-                    _summary_rows = ""
-                    for _s in STAGE_KEYS:
-                        _active_m  = st.session_state.models.get(_s, _base.get(_s, "—"))
-                        _preset_m  = _base.get(_s, "—")
-                        _changed   = _active_m != _preset_m
-                        _color     = "var(--accent)" if _changed else "var(--text-muted)"
-                        _badge     = (
-                            f' <span style="font-size:0.62rem;color:var(--text-faint);">'
-                            f'← was {_esc(_preset_m)}</span>'
-                        ) if _changed else ""
-                        _summary_rows += (
-                            f'<div style="display:flex;align-items:baseline;'
-                            f'justify-content:space-between;padding:3px 0;font-size:0.78rem;">'
-                            f'<span style="color:var(--text-faint);">{_esc(_stage_display_names[_s])}</span>'
-                            f'<span style="color:{_color};font-family:\'IBM Plex Mono\',monospace;">'
-                            f'{_esc(_active_m)}{_badge}</span></div>'
-                        )
-                    _n_changed = sum(
-                        1 for _s in STAGE_KEYS
-                        if st.session_state.models.get(_s) != _base.get(_s)
-                    )
-                    _header_color = "var(--accent)" if _n_changed else "var(--text-faint)"
-                    _header_label = (
-                        f"Custom — {_n_changed} stage(s) overridden"
-                        if _n_changed else "No overrides — same as preset"
-                    )
-                    st.markdown(
-                        f'<div style="background:var(--bg-elev-2);border:1px solid var(--border);'
-                        f'border-radius:8px;padding:8px 12px;margin-top:4px;">'
-                        f'<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.1em;'
-                        f'text-transform:uppercase;color:{_header_color};margin-bottom:6px;">'
-                        f'{_esc(_header_label)}</div>'
-                        + _summary_rows + '</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                    # Summary of what's ready on this machine.
-                    _ready_providers = []
-                    if _has_anthropic: _ready_providers.append("Claude")
-                    if _has_google:    _ready_providers.append("Gemini")
-                    if _ollama_ok:     _ready_providers.append(f"Ollama ({len(_pulled)} model pulled)")
-                    st.caption("Available: " + " · ".join(_ready_providers) if _ready_providers else "No providers configured.")
-
-        # ── ESTIMATED RUN COST ────────────────────────────────────────────────
         _vision_present = bool(vision_samples) or bool(vision_uploads)
         _transcript_ready = bool(transcript_choice) or bool(transcript_upload) or _vision_present
 
-        _pre_cost_usd, _pre_in_tokens, _pre_out_tokens = _estimate_pre_run_cost(
-            transcript_choice=transcript_choice, transcript_upload=transcript_upload,
-            constraints_choice=constraints_choice, constraints_upload=constraints_upload,
-            backlog_choice=backlog_choice, backlog_upload=backlog_upload,
-            models=st.session_state.models,
-        )
-        if _transcript_ready and (_pre_in_tokens > 0 or _pre_out_tokens > 0):
-            _cost_line = (
-                f"≈ <strong style='color:var(--accent)'>${_pre_cost_usd:.4f}</strong> "
-                f"<span style='color:var(--text-faint)'>·</span> "
-                f"<span style='color:var(--text-muted)'>{_pre_in_tokens // 1000}k in, ~{_pre_out_tokens // 1000}k out</span>"
-            )
+        # ── Rate-limit usage badge ────────────────────────────────────────────
+        if MAX_SYNTHESES_PER_HOUR > 0 or MAX_SYNTHESES_PER_DAY > 0:
+            _rl_hourly, _rl_daily = get_request_counts(_current_user)
+            _rl_parts = []
+            if MAX_SYNTHESES_PER_HOUR > 0:
+                _rl_h_pct = _rl_hourly / MAX_SYNTHESES_PER_HOUR
+                _rl_h_color = "#fb7185" if _rl_hourly >= MAX_SYNTHESES_PER_HOUR else \
+                              "#f59e0b" if _rl_h_pct >= 0.8 else "#34d399"
+                _rl_parts.append(
+                    f'<span style="color:{_rl_h_color};font-weight:600;">'
+                    f'{_rl_hourly}/{MAX_SYNTHESES_PER_HOUR}</span>'
+                    f'<span style="color:var(--text-faint);"> this hour</span>'
+                )
+            if MAX_SYNTHESES_PER_DAY > 0:
+                _rl_d_pct = _rl_daily / MAX_SYNTHESES_PER_DAY
+                _rl_d_color = "#fb7185" if _rl_daily >= MAX_SYNTHESES_PER_DAY else \
+                              "#f59e0b" if _rl_d_pct >= 0.8 else "#34d399"
+                _rl_parts.append(
+                    f'<span style="color:{_rl_d_color};font-weight:600;">'
+                    f'{_rl_daily}/{MAX_SYNTHESES_PER_DAY}</span>'
+                    f'<span style="color:var(--text-faint);"> today</span>'
+                )
             st.markdown(
-                "<div style='padding:0.45rem 0.8rem;background:var(--bg-elev-1);"
-                "border:1px solid var(--border);border-left:3px solid var(--accent);"
-                "border-radius:8px;font-size:0.82rem;margin-bottom:0.5rem;'>"
-                "<span style='font-size:0.62rem;font-weight:700;letter-spacing:0.12em;"
-                "text-transform:uppercase;color:var(--accent);display:block;margin-bottom:0.2rem;'>"
-                "Estimated run cost</span>"
-                f"{_cost_line}</div>",
+                '<div style="font-size:0.75rem;margin-bottom:6px;display:flex;gap:10px;'
+                'align-items:center;padding:4px 8px;background:var(--bg-elev-1);'
+                'border:1px solid var(--border);border-radius:6px;">'
+                '<span style="font-size:0.62rem;font-weight:700;letter-spacing:0.12em;'
+                'text-transform:uppercase;color:var(--text-faint);">Runs</span>'
+                + " &nbsp;·&nbsp; ".join(_rl_parts)
+                + "</div>",
                 unsafe_allow_html=True,
             )
-        else:
-            _transcript_ready = False
 
         # ── SYNTHESIZE ────────────────────────────────────────────────────────
+        _rate_blocked = (
+            (MAX_SYNTHESES_PER_HOUR > 0 and _rl_hourly >= MAX_SYNTHESES_PER_HOUR)
+            or (MAX_SYNTHESES_PER_DAY > 0 and _rl_daily >= MAX_SYNTHESES_PER_DAY)
+        ) if (MAX_SYNTHESES_PER_HOUR > 0 or MAX_SYNTHESES_PER_DAY > 0) else False
         run_clicked = st.button(
             "▶  Synthesize", type="primary", use_container_width=True,
-            disabled=not _transcript_ready,
+            disabled=not _transcript_ready or _rate_blocked,
         )
         if not _transcript_ready:
             st.caption("↑ Pick a transcript source first.")
+        elif _rate_blocked:
+            st.caption("Rate limit reached — see counts above.")
 
         # ── JIRA PUSH — gated by jira_write_back feature flag ────────────────
         # Approval dialog is always shown regardless; this flag controls visibility.
@@ -2459,7 +1818,7 @@ with st.sidebar:
             os.environ.get("JIRA_BASE_URL") and os.environ.get("JIRA_EMAIL")
             and os.environ.get("JIRA_API_TOKEN") and os.environ.get("JIRA_PROJECT_KEY")
         )
-        _jira_write_allowed = _ff.is_enabled(_current_role, "jira_write_back")
+        _jira_write_allowed = True
         if _sb_jira_ready and _jira_write_allowed and st.session_state.get("result"):
             if st.button(f"⤴  Push to Jira ({os.environ.get('JIRA_PROJECT_KEY')})",
                          use_container_width=True, key="sidebar_jira_btn"):
@@ -2467,52 +1826,13 @@ with st.sidebar:
         elif _sb_jira_ready and _jira_write_allowed:
             st.caption("Run a synthesis first, then push to Jira.")
 
-        # ── ADVANCED OPTIONS — admin only ─────────────────────────────────────
-        # Contributors get safe defaults silently; no expander shown to them.
-        if _is_admin():
-            with st.expander("⚙ Advanced options", expanded=False):
-                redact_pii = st.toggle(
-                    "Mask personal & sensitive info", value=True,
-                    help="Replace PII with stable placeholders before the LLM sees input. Un-redacted in output.",
-                )
-                dry_run = st.toggle(
-                    "Dry run (preview prompts only)", value=False,
-                    help="Build prompts but skip LLM calls — zero API spend.",
-                )
-                auto_switch = st.toggle(
-                    "Auto-switch model on failure / vision", value=False, key="auto_switch",
-                    help="On failure, retry on the other provider. Bumps Parser to Claude when an image is attached.",
-                )
-                compare_enabled = st.toggle(
-                    "Compare two presets side-by-side", value=False, key="compare_enabled",
-                    help="Runs the pipeline twice and shows a side-by-side summary. Doubles cost and time.",
-                )
-                compare_with_preset = "free"
-                if compare_enabled:
-                    compare_with_preset = st.selectbox(
-                        "Compare against",
-                        options=list(MODEL_PRESETS.keys()),
-                        index=list(MODEL_PRESETS.keys()).index("free"),
-                        key="compare_with_preset",
-                    )
-        else:
-            # Contributor defaults — PII always on, no dry-run, no compare
-            redact_pii = True
-            dry_run = False
-            auto_switch = False
-            compare_enabled = False
-            compare_with_preset = "free"
-
-    # ── end role-gated block ──────────────────────────────────────────────────
-    # Ensure _transcript_ready is always defined (viewer path doesn't set it).
-    if not _can_run():
-        _transcript_ready = False
+    # ── end sidebar inputs block ──────────────────────────────────────────────
 
     # ── FOOTER ─────────────────────────────────────────────────────────────
     st.markdown(
         '<div class="acc-footer">'
         '<span class="acc-mark">accenture&gt;</span> · AI-First Agentic Solutions<br>'
-        'Demonstration on mock data — fictional client <strong>NorthStar Retail</strong>. '
+        f'Demonstration on mock data — fictional client <strong>{CLIENT_NAME}</strong>. '
         'Jira / Confluence run in mock mode by default; live Atlassian is optional.'
         '</div>',
         unsafe_allow_html=True,
@@ -2530,104 +1850,7 @@ _save_ui_state({
 
 # -------------------------------------------------------- main canvas
 
-# ---- Admin Settings dialog ----
-@st.dialog("Admin Settings — Feature Flags", width="large")
-def show_admin_settings_dialog() -> None:
-    """Admin-only panel to view and edit contributor feature flags live."""
-    st.markdown(
-        "Edit what **contributors** can do. Changes save to `config/feature_flags.yaml` "
-        "and take effect immediately after saving. Admins always have full access."
-    )
-
-    flags = _ff.to_dict()
-    c = flags.get("contributor", {})
-
-    st.markdown("#### Model presets")
-    _all_preset_keys = ["free", "balanced", "premium", "local"]
-    _preset_labels_map = {"free": "Free (Gemini Flash)", "balanced": "Balanced (Gemini + Claude)",
-                          "premium": "Premium (all Claude)", "local": "Local (Ollama + Claude)"}
-    current_allowed = set(c.get("allowed_presets") or [])
-    new_allowed = []
-    cols = st.columns(4)
-    for i, key in enumerate(_all_preset_keys):
-        with cols[i]:
-            checked = st.checkbox(_preset_labels_map[key], value=(key in current_allowed),
-                                  key=f"ff_preset_{key}")
-            if checked:
-                new_allowed.append(key)
-    c["allowed_presets"] = new_allowed
-
-    st.markdown("#### Per-stage model locks")
-    st.caption("Lock a stage to a specific model — contributor UI still shows their selection, "
-               "but the orchestrator uses the locked model. Leave blank to let contributors choose freely.")
-    _stage_display = {
-        "parser": "Parser", "constraint": "Constraint Extractor",
-        "story_writer": "Story Writer", "epic_decomposer": "Epic Decomposer",
-        "gap_detector": "Gap Detector",
-    }
-    _lock_options = ["(none — contributor chooses)", "claude-sonnet-4-5", "claude-haiku-4-5",
-                     "gemini-2.5-flash", "gemini-2.5-pro", "ollama/llama3.2:3b"]
-    locks = dict(c.get("stage_model_locks") or {})
-    lcols = st.columns(2)
-    for i, (stage, label) in enumerate(_stage_display.items()):
-        with lcols[i % 2]:
-            current_lock = locks.get(stage) or _lock_options[0]
-            if current_lock not in _lock_options:
-                current_lock = _lock_options[0]
-            picked = st.selectbox(label, options=_lock_options,
-                                  index=_lock_options.index(current_lock),
-                                  key=f"ff_lock_{stage}")
-            locks[stage] = None if picked == _lock_options[0] else picked
-    c["stage_model_locks"] = locks
-
-    st.markdown("#### Rate limits")
-    rl_c1, rl_c2 = st.columns(2)
-    with rl_c1:
-        c["max_runs_per_hour"] = st.number_input(
-            "Max runs / hour", min_value=1, max_value=100,
-            value=int(c.get("max_runs_per_hour", 10)), key="ff_runs_hr")
-    with rl_c2:
-        c["max_cost_per_day_usd"] = st.number_input(
-            "Max cost / day (USD)", min_value=0.5, max_value=50.0,
-            value=float(c.get("max_cost_per_day_usd", 5.0)),
-            step=0.5, format="%.2f", key="ff_cost_day")
-
-    st.markdown("#### Feature toggles")
-    _toggles = [
-        ("compare_mode",    "A/B Compare mode",           "Doubles cost and time"),
-        ("vision_input",    "Vision / whiteboard upload",  "Allow photo inputs"),
-        ("dry_run_allowed", "Dry-run mode",                "Preview prompts without LLM calls"),
-        ("jira_write_back", "Jira write-back",             "Push to Jira (approval gate always shown)"),
-        ("live_jira_read",  "Live Jira read",              "Pull live backlog as input"),
-        ("pii_override",    "PII masking override",        "Allow turning off PII masking"),
-    ]
-    t_cols = st.columns(2)
-    for i, (key, label, hint) in enumerate(_toggles):
-        with t_cols[i % 2]:
-            c[key] = st.toggle(label, value=bool(c.get(key, False)),
-                               help=hint, key=f"ff_toggle_{key}")
-
-    flags["contributor"] = c
-    st.divider()
-    if st.button("💾  Save feature flags", type="primary", use_container_width=True,
-                 key="ff_save_btn"):
-        try:
-            FeatureFlags.save(flags)
-            # Reload so changes take effect immediately for this session.
-            st.session_state.feature_flags = FeatureFlags.load()
-            st.success("Saved. Feature flags updated — contributors will see the new settings on their next action.")
-        except Exception as e:  # noqa: BLE001
-            st.error(f"Save failed: {e}")
-
-    st.caption(
-        "Saving writes `config/feature_flags.yaml`. In a multi-replica deployment, "
-        "all replicas read the same file so the change propagates on their next page load."
-    )
-
-
-# Deferred dialog triggers — called here (after definition) based on sidebar button clicks.
-if st.session_state.pop("_trigger_admin_settings", False):
-    show_admin_settings_dialog()
+# ---- Main canvas ----
 
 
 # ---- Top-nav dialogs ----
@@ -2673,9 +1896,6 @@ def show_jira_dialog() -> None:
     res = st.session_state.get("result")
     if not res:
         st.info("Run a synthesis first — then publish it to Jira here.")
-        return
-    if not _can_push_jira():
-        st.error("Your account does not have permission to push to Jira.")
         return
     _ready = all(os.environ.get(k) for k in
                  ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"))
@@ -2846,7 +2066,7 @@ with _hdr_right:
             )
 
 if _nav_clicked.get("home"):
-    for _k in ("result", "run_dir", "dry_run_result", "jira_publish_result"):
+    for _k in ("result", "run_dir", "jira_publish_result"):
         st.session_state[_k] = None
     st.rerun()
 if _nav_clicked.get("history"):
@@ -2890,16 +2110,42 @@ def _as_upload_list(uploaded) -> list:
 
 def _read_one_text(uploaded) -> str:
     name = uploaded.name
+    raw_bytes = uploaded.getvalue()
+
+    if len(raw_bytes) > _MAX_UPLOAD_BYTES:
+        raise InputError(
+            f"**{name}** is {len(raw_bytes) // 1024} KB — "
+            f"maximum allowed is {_MAX_UPLOAD_BYTES // 1024} KB. "
+            "Set the `MAX_UPLOAD_BYTES` environment variable to increase the limit."
+        )
+
     suffix = Path(name).suffix.lower()
     if suffix == ".pdf":
         tmp = ROOT / "logs" / f"_upload_{int(time.time() * 1000)}_{name}"
         tmp.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_bytes(uploaded.getvalue())
+        tmp.write_bytes(raw_bytes)
         try:
-            return load_text(str(tmp))
+            text = load_text(str(tmp))
         finally:
             tmp.unlink(missing_ok=True)
-    return uploaded.getvalue().decode("utf-8", errors="replace")
+    else:
+        text = raw_bytes.decode("utf-8", errors="replace")
+
+    # Warn on injection patterns detected in uploaded content.
+    # InputSanitizer is the single source of truth for all injection rules.
+    # We scan here for an early UI warning; the pipeline re-scans and redacts
+    # in initialize_node before any LLM stage sees the text.
+    from security import InputSanitizer as _InputSanitizer
+    _, _upload_findings = _InputSanitizer.scan(text, source=name)
+    if _upload_findings:
+        st.warning(
+            f"⚠️ **Possible prompt injection detected** in **{name}** "
+            f"({len(_upload_findings)} pattern(s): "
+            f"{', '.join(f.code for f in _upload_findings[:3])}). "
+            "The pipeline will redact injections before any LLM stage sees them."
+        )
+
+    return text
 
 
 def _read_uploaded_text(uploaded) -> str:
@@ -2924,7 +2170,13 @@ def _read_uploaded_tickets(uploaded) -> list[dict]:
     All tickets across files are concatenated into one backlog."""
     merged: list[dict] = []
     for f in _as_upload_list(uploaded):
-        raw = f.getvalue().decode("utf-8", errors="replace")
+        raw_bytes = f.getvalue()
+        if len(raw_bytes) > _MAX_UPLOAD_BYTES:
+            raise InputError(
+                f"**{f.name}** is {len(raw_bytes) // 1024} KB — "
+                f"maximum allowed is {_MAX_UPLOAD_BYTES // 1024} KB."
+            )
+        raw = raw_bytes.decode("utf-8", errors="replace")
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
@@ -2975,13 +2227,6 @@ def _resolve_tickets(selected, options: dict, uploaded) -> list[dict]:
 _main_canvas_run = bool(st.session_state.pop("_pending_run", False))
 
 if run_clicked or _main_canvas_run:
-    # ---- Rate limit check ----
-    try:
-        check_rate_limit(_current_user)
-    except RateLimitError as _rle:
-        st.error(f"**Rate limit reached:** {_rle}")
-        st.stop()
-
     # ---- Resolve inputs ----
     # Each picker is multi-select: combine every chosen sample (+ uploads)
     # into one source. Transcripts/wikis are concatenated; backlogs merged.
@@ -3007,51 +2252,109 @@ if run_clicked or _main_canvas_run:
         st.error(f"Could not load inputs: {e}")
         st.stop()
 
-    # ---- Default-on PII redaction for uploaded content ----
-    # Any user-uploaded file may contain real customer/employee PII.
-    # Regardless of the sidebar toggle, force redaction when the user
-    # uploaded files rather than selecting bundled samples.
-    # Admins can override by setting redact_pii=False in the sidebar
-    # (the toggle is disabled for non-admins so they always land here).
-    _has_user_uploads = bool(
-        _as_upload_list(transcript_upload)
-        or _as_upload_list(constraints_upload)
-        or _as_upload_list(backlog_upload)
-    )
-    if _has_user_uploads and not _is_admin():
-        redact_pii = True  # enforce for contributor + viewer uploads
-
-    # ---- Dry-run branch ----
-    if dry_run:
-        try:
-            orch = Orchestrator()
-        except Exception as e:
-            st.error(f"Orchestrator init failed: {e}")
-            st.stop()
-        dry_result = orch.run(
-            transcript_text=transcript_text,
-            constraint_text=constraint_text,
-            existing_tickets=existing_tickets,
-            redact_pii=redact_pii,
-            dry_run=True,
-            models=st.session_state.models,
+    # ---- Idempotency: block exact duplicate within 60 s ----
+    # Hashes the inputs so that a double-click or browser back/forward that
+    # replays the same form submission does not kick off a second full run.
+    _run_sig = hashlib.sha256(
+        f"{transcript_text}|{constraint_text}|"
+        f"{sorted((st.session_state.get('models') or {}).items())}".encode()
+    ).hexdigest()[:12]
+    _last_sig = st.session_state.get("_last_run_sig")
+    _last_run_at = float(st.session_state.get("_last_run_at", 0))
+    if _run_sig == _last_sig and time.time() - _last_run_at < 60:
+        st.warning(
+            "This exact input was already synthesized less than 60 seconds ago. "
+            "If you want to re-run, please wait a moment or change your inputs."
         )
-        st.session_state.dry_run_result = {
-            **dry_result,
-            "source_label": source_label,
-        }
-        # Clear regular result so the dry-run view takes over.
-        st.session_state.result = None
-        st.session_state.stage_states = ["skipped"] * len(_STAGES)
-        st.rerun()
+        st.stop()
+    st.session_state["_last_run_sig"] = _run_sig
+    st.session_state["_last_run_at"] = time.time()
+
+    # ---- Per-user request rate limit gate ----
+    _rate_allowed, _rate_reason = check_rate_limit(
+        _current_user, MAX_SYNTHESES_PER_HOUR, MAX_SYNTHESES_PER_DAY
+    )
+    if not _rate_allowed:
+        st.error(f"**Rate limit reached.** {_rate_reason}")
+        st.stop()
+
+    # ---- Per-user daily budget gate (atomic reserve) ----
+    # try_reserve atomically checks AND pre-charges the estimated cost so two
+    # concurrent requests from the same user cannot both pass the gate.
+    # settle_reservation corrects for the actual cost after the run.
+    _pre_run_estimated_cost, _, _ = _estimate_pre_run_cost(
+        transcript_choice=transcript_choice,
+        transcript_upload=transcript_upload,
+        constraints_choice=constraints_choice,
+        constraints_upload=constraints_upload,
+        backlog_choice=backlog_choice,
+        backlog_upload=backlog_upload,
+        models=dict(st.session_state.get("models") or {}),
+        TRANSCRIPT_OPTIONS=TRANSCRIPT_OPTIONS,
+        CONSTRAINTS_OPTIONS=CONSTRAINTS_OPTIONS,
+        BACKLOG_OPTIONS=BACKLOG_OPTIONS,
+    )
+    _budget_approved = True
+    if DAILY_BUDGET_USD > 0:
+        _budget_approved, _reserved_spend = try_reserve(
+            _current_user, _pre_run_estimated_cost, DAILY_BUDGET_USD
+        )
+        if not _budget_approved:
+            _today_spend = get_today_spend(_current_user)
+            st.error(
+                f"**Daily budget cap reached.** "
+                f"You have spent ${_today_spend:.4f} today against your "
+                f"${DAILY_BUDGET_USD:.2f} daily limit. "
+                "Ask your admin to raise `DAILY_BUDGET_USD` or try again tomorrow."
+            )
+            st.stop()
+        elif _reserved_spend >= 0.8 * DAILY_BUDGET_USD:
+            st.warning(
+                f"You have used ${_reserved_spend:.4f} of your "
+                f"${DAILY_BUDGET_USD:.2f} daily budget "
+                f"({100 * _reserved_spend / DAILY_BUDGET_USD:.0f}%). "
+                "Approaching limit."
+            )
+    else:
+        _reserved_spend = 0.0
+
+    # ---- Input size pre-flight check ----
+    # Mirrors the guard in initialize_node so the user gets instant feedback
+    # rather than waiting for the background thread to start and fail.
+    _MAX_INPUT_TOKENS = int(os.environ.get("MAX_INPUT_TOKENS_PER_RUN", "50000"))
+    _est_transcript_tokens = len(transcript_text) // 4
+    _est_constraint_tokens = len(constraint_text) // 4
+    _est_total_tokens = _est_transcript_tokens + _est_constraint_tokens
+    if _est_total_tokens > _MAX_INPUT_TOKENS:
+        st.error(
+            f"**Input too large.** "
+            f"Estimated input size ({_est_total_tokens:,} tokens) exceeds the "
+            f"`MAX_INPUT_TOKENS_PER_RUN` limit of {_MAX_INPUT_TOKENS:,} tokens "
+            f"(transcript ≈ {_est_transcript_tokens:,}, constraints ≈ {_est_constraint_tokens:,}). "
+            "Shorten your transcript/wiki or ask your admin to raise `MAX_INPUT_TOKENS_PER_RUN`."
+        )
+        if DAILY_BUDGET_USD > 0:
+            settle_reservation(_current_user, 0.0, _pre_run_estimated_cost)
+        st.stop()
+
+    # ---- Process-level concurrency guard ----
+    # Allow up to _MAX_CONCURRENT_SYNTHESES runs simultaneously. Beyond that,
+    # tell the user to wait rather than queuing silently (which would hide
+    # the multi-minute wait time behind a spinner with no ETA).
+    if not _SYNTHESIS_SEMAPHORE.acquire(blocking=False):
+        st.warning(
+            f"All {_MAX_CONCURRENT_SYNTHESES} synthesis slot(s) are currently in use. "
+            "Please wait a moment and try again, or ask your admin to increase "
+            "`MAX_CONCURRENT_SYNTHESES`."
+        )
+        st.stop()
 
     # ---- Live-run branch ----
-    # Clear any prior dry-run preview and stale per-stage metadata so the
-    # in-flight UI doesn't render alongside the new live run.
     st.session_state.dry_run_result = None
     st.session_state.model_used = ""
     st.session_state.token_usage = {}
 
+    record_synthesis_start()
     t0 = time.perf_counter()
     stage_states = ["idle"] * len(_STAGES)
     with _pipeline_placeholder.container():
@@ -3200,18 +2503,8 @@ if run_clicked or _main_canvas_run:
             _vision_atts = None
 
     # Capture all session-state values NOW (main thread) before starting
-    # the background thread. st.session_state is NOT thread-safe — reading
-    # it from a daemon thread causes "has no attribute 'models'" errors.
-    # Apply any admin-configured stage model locks for this role.
-    # e.g. if story_writer is locked to "claude-sonnet-4-5", that overrides
-    # whatever preset the contributor selected.
-    _thread_models = _ff.apply_stage_locks(
-        _current_role, dict(st.session_state.get("models") or {})
-    )
-    _thread_is_compare   = bool(st.session_state.get("compare_enabled"))
-    _thread_compare_pset = st.session_state.get("compare_with_preset", "free")
-    _thread_active_pset  = (st.session_state.get("active_preset") or "balanced").title()
-    _thread_auto_switch  = bool(st.session_state.get("auto_switch"))
+    # the background thread. st.session_state is NOT thread-safe.
+    _thread_models = dict(st.session_state.get("models") or {})
 
     # Thread the pipeline so the Cancel button stays responsive. The run
     # executes in a daemon thread; the main thread polls a result queue.
@@ -3221,51 +2514,25 @@ if run_clicked or _main_canvas_run:
 
     def _run_pipeline():
         try:
-            if _thread_is_compare:
-                secondary_models = dict(MODEL_PRESETS.get(
-                    _thread_compare_pset, MODEL_PRESETS["free"]
-                ))
-                cmp = orch.run_compare(
-                    primary_models=_thread_models,
-                    secondary_models=secondary_models,
-                    primary_label=_thread_active_pset,
-                    secondary_label=_thread_compare_pset.title(),
-                    progress_callback=_on_progress,
-                    transcript_text=transcript_text,
-                    constraint_text=constraint_text,
-                    existing_tickets=existing_tickets,
-                    redact_pii=redact_pii,
-                    live_confluence_page_id=_live_conf_pid or None,
-                    live_jira=_use_live_jira,
-                    vision_attachments=_vision_atts,
-                    auto_switch=_thread_auto_switch,
-                )
-                r = cmp["primary"]
-                r["_compare_secondary"] = cmp["secondary"]
-                r["_compare_summary"] = cmp["comparison"]
-                r["_compare_labels"] = cmp["labels"]
-                _result_q.put(("ok", r))
-            else:
-                r = orch.run(
-                    transcript_text=transcript_text,
-                    constraint_text=constraint_text,
-                    existing_tickets=existing_tickets,
-                    redact_pii=redact_pii,
-                    progress_callback=_on_progress,
-                    models=_thread_models,
-                    live_confluence_page_id=_live_conf_pid or None,
-                    live_jira=_use_live_jira,
-                    vision_attachments=_vision_atts,
-                    auto_switch=_thread_auto_switch,
-                    run_metadata={
-                        "user_id":      _current_user,
-                        "role":         _current_role,
-                        "preset":       st.session_state.get("active_preset", "unknown"),
-                        "source_label": source_label,
-                        "auth_disabled": _auth_disabled,
-                    },
-                )
-                _result_q.put(("ok", r))
+            r = orch.run(
+                transcript_text=transcript_text,
+                constraint_text=constraint_text,
+                existing_tickets=existing_tickets,
+                progress_callback=_on_progress,
+                models=_thread_models,
+                live_confluence_page_id=_live_conf_pid or None,
+                live_jira=_use_live_jira,
+                vision_attachments=_vision_atts,
+                user_email=_current_user,
+                run_metadata={
+                    "user_id":      _current_user,
+                    "role":         _current_role,
+                    "preset":       st.session_state.get("active_preset", "unknown"),
+                    "source_label": source_label,
+                    "auth_disabled": _auth_disabled,
+                },
+            )
+            _result_q.put(("ok", r))
         except _PipelineCancelled:
             _result_q.put(("cancelled", None))
         except Exception as exc:  # noqa: BLE001
@@ -3295,7 +2562,18 @@ if run_clicked or _main_canvas_run:
     # preventing the browser from receiving any WebSocket updates until the
     # entire run finishes. The polling loop below lets the main thread render
     # every 300 ms so each stage appears as it completes.
+    _poll_deadline = t0 + _SYNTHESIS_TIMEOUT  # absolute deadline for auto-cancel
     while _thread.is_alive():
+        # Graceful shutdown: entrypoint.sh writes this flag when SIGTERM arrives.
+        # Setting _cancel_event lets the current LLM stage finish before stopping.
+        if _SHUTDOWN_FLAG.exists():
+            _cancel_event.set()
+        # Auto-cancel if synthesis exceeds the configured wall-clock timeout.
+        # This also handles the browser-disconnect case: once the session's
+        # WebSocket is gone the main thread keeps running this loop, and the
+        # deadline ensures we don't burn API credits indefinitely.
+        if not _cancel_event.is_set() and time.perf_counter() > _poll_deadline:
+            _cancel_event.set()
         with _pipeline_placeholder.container():
             _render_pipeline(
                 stage_states=list(stage_states),  # snapshot to avoid race
@@ -3311,6 +2589,10 @@ if run_clicked or _main_canvas_run:
 
     _status, _payload = _result_q.get()
     if _status == "cancelled":
+        _SYNTHESIS_SEMAPHORE.release()
+        record_synthesis_end("cancelled", time.perf_counter() - t0)
+        # Refund the full budget reservation — run produced nothing billable.
+        settle_reservation(_current_user, 0.0, _pre_run_estimated_cost)
         progress_log.append(
             '<div class="log-line log-failed"><span class="log-icon">✕</span>'
             '<strong>Run cancelled by user</strong></div>'
@@ -3319,6 +2601,10 @@ if run_clicked or _main_canvas_run:
         st.warning("Run cancelled — partial results (if any) were not saved.")
         st.stop()
     elif _status == "error":
+        _SYNTHESIS_SEMAPHORE.release()
+        record_synthesis_end("failure", time.perf_counter() - t0)
+        # Refund the full budget reservation — run failed before completing.
+        settle_reservation(_current_user, 0.0, _pre_run_estimated_cost)
         _progress_placeholder.error(f"Pipeline failed: {_payload}")
         st.stop()
 
@@ -3371,7 +2657,7 @@ if run_clicked or _main_canvas_run:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Scope outputs to the current user — outputs/<user_id>/<timestamp>/
     _safe_uid = "".join(c if c.isalnum() or c in "-_." else "_" for c in (_current_user or "anonymous"))
-    run_dir = ROOT / "outputs" / _safe_uid / stamp
+    run_dir = OUTPUTS_DIR / _safe_uid / stamp
     # `result` from the orchestrator now includes `token_usage` and `model`.
     # write_outputs reads the synthesis content fields; the extras are
     # carried through to the JSON dump as well — useful downstream.
@@ -3380,16 +2666,19 @@ if run_clicked or _main_canvas_run:
     audit_path = run_dir / "audit_trail.md"
     audit_path.write_text(result["audit_trail"], encoding="utf-8")
 
-    # ---- Token + cost tally (from orchestrator's structured token_usage) ----
-    # With per-stage model selection, we can no longer use a single model
-    # rate for the whole run. Instead, walk the per-agent token usage and
-    # apply the matching stage's model rate; sum to get the total.
+    # ---- Token tally ----
     token_usage = result.get("token_usage") or {}
     total = token_usage.get("total") or {"input": 0, "output": 0}
     tokens_total = int(total.get("input", 0)) + int(total.get("output", 0))
     model_name = result.get("model") or ""
-    models_per_stage = result.get("models") or {}
-    cost_usd = _compute_total_cost(token_usage, models_per_stage)
+    cost_usd = _compute_total_cost(token_usage, result.get("models") or {})
+    record_synthesis_end("success", elapsed, cost_usd, token_usage, model_name)
+    # Settle the budget reservation: charge actual cost, refund unused estimate.
+    # This replaces the old record_spend() call and closes the concurrent-user
+    # race window where two users both passed the budget gate before either run
+    # had recorded its spend.
+    settle_reservation(_current_user, cost_usd, _pre_run_estimated_cost)
+    increment_request_count(_current_user)
 
     st.session_state.result = result
     st.session_state.run_dir = run_dir
@@ -3420,7 +2709,7 @@ if run_clicked or _main_canvas_run:
         "gap_count": len(result.get("gaps") or []),
         "conflict_count": len(result.get("conflicts") or []),
         "model": model_name,
-        "models": models_per_stage,
+        "models": result.get("models") or {},
         "token_usage": token_usage,
         "cost_usd": cost_usd,
         "outputs": {
@@ -3430,60 +2719,14 @@ if run_clicked or _main_canvas_run:
         },
     }
     _save_run_to_disk(history_summary)
+    _SYNTHESIS_SEMAPHORE.release()
 
 
 # -------------------------------------------------------- results / empty state
 
-dry_view = st.session_state.dry_run_result
 result = st.session_state.result
 
-if dry_view is not None and result is None:
-    # ---- Dry-run two-column preview ----
-    st.markdown(
-        '<div class="run-meta">'
-        f'<span class="run-meta-item"><span class="run-meta-icon">⊘</span>'
-        f'<span class="run-meta-label">Mode</span>Dry run — no LLM calls</span>'
-        f'<span class="run-meta-sep">·</span>'
-        f'<span class="run-meta-item"><span class="run-meta-icon">✦</span>'
-        f'<span class="run-meta-label">Source</span>{_esc(dry_view.get("source_label", "—"))}</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-    col_left, col_right = st.columns([1, 1])
-    with col_left:
-        st.markdown("#### Source preview")
-        src = dry_view.get("transcript_text") or ""
-        st.code(
-            src[:1500] + ("\n\n... [truncated]" if len(src) > 1500 else ""),
-            language="text",
-        )
-        constraint_src = dry_view.get("constraint_text") or ""
-        if constraint_src:
-            with st.expander(f"Wiki / constraint text ({len(constraint_src):,} chars)"):
-                st.code(
-                    constraint_src[:1500] + ("\n\n... [truncated]" if len(constraint_src) > 1500 else ""),
-                    language="text",
-                )
-        st.caption(
-            f"Existing tickets: **{dry_view.get('existing_ticket_count', 0)}** — "
-            "used by the Gap Detector at run time."
-        )
-    with col_right:
-        st.markdown("#### Constructed prompts")
-        prompts = dry_view.get("dry_run_prompts") or {}
-        for agent_name, prompt_text in prompts.items():
-            pretty = agent_name.replace("_", " ").title()
-            with st.expander(f"{pretty} prompt ({len(prompt_text):,} chars)"):
-                # Showing the full prompt — these are template files, not
-                # user secrets.
-                st.code(prompt_text, language="markdown")
-    st.info(
-        "Dry run active. Toggle **Dry run** off in the sidebar, then click "
-        "**Synthesize** to actually run the agents."
-    )
-
-elif result is None:
+if result is None:
     # ---- Empty state ----
     # Home-screen explainer ported from UI-smart-backlog-assistant. Unlike
     # the previous "Selected inputs" block, this view is purely
@@ -3585,15 +2828,6 @@ else:
         if _fo_n:
             _bits.append(f"⚠ {_fo_n} stage(s) failed over to the other provider")
         st.warning(" · ".join(_bits) + " — see the **Audit trail** tab for details.")
-
-    # ---- Compare-mode banner ----
-    # When the run was a compare, surface the side-by-side metrics
-    # immediately under the KPIs so the user sees the two providers'
-    # outputs without leaving the page.
-    cmp_summary = result.get("_compare_summary")
-    cmp_labels = result.get("_compare_labels") or {}
-    if cmp_summary:
-        _render_compare_banner(cmp_summary, cmp_labels, result)
 
     # ---- Guardrail findings strip ----
     # Non-blocking heuristic checks ran post-LLM. We surface a coloured

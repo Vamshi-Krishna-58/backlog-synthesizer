@@ -1,22 +1,16 @@
-"""Wrapped Google Gemini API client — mirrors the shape of `ClaudeTool`.
+"""Google Gemini API client — backed by langchain-google-genai.
 
-Why this exists:
-    Agents are coded to talk to one "LLM tool" instance. By exposing the
-    *same* public surface (`call`, `call_for_json`, `model`, `name`) as
-    `ClaudeTool`, the orchestrator can pick a provider per stage and swap
-    the tool instance into the agent constructor without the agent
-    knowing or caring which provider is in play.
+Internally uses ``langchain_google_genai.ChatGoogleGenerativeAI`` while
+preserving the same ``call()`` / ``call_for_json()`` interface as ClaudeTool,
+so agents can swap providers without knowing which one is in use.
 
-Implementation notes:
-  - Uses the **new** `google-genai` SDK (`from google import genai`) NOT the
-    legacy `google-generativeai` package. See V2's `analyzer.py` for the
-    reference call shape — we copy it.
-  - Reads `GOOGLE_API_KEY` from the environment.
-  - Returns usage as `{"input_tokens": N, "output_tokens": N}` so the
-    orchestrator's token aggregator (which keys by agent name and reads
-    `usage.input_tokens` / `usage.output_tokens`) works unchanged.
-  - JSON extraction reuses `_extract_json_block` from `claude_tool` so the
-    defensive parsing logic stays in one place.
+Behaviour preserved from the original:
+  - Reads ``GOOGLE_API_KEY`` (also accepts ``GEMINI_API_KEY`` alias).
+  - Returns usage as ``{"input_tokens": N, "output_tokens": N}``.
+  - JSON extraction reuses ``ClaudeTool._extract_json_block`` — defensive
+    parsing works identically for all providers.
+  - Transient errors (quota / rate-limit / 5xx / network) are classified
+    and surfaced as ``ToolError`` so the orchestrator handles them uniformly.
 """
 
 from __future__ import annotations
@@ -24,126 +18,130 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
 from logger_setup import get_logger
 from tools.base import Tool, ToolError
 from tools.claude_tool import ClaudeTool, PROMPTS_DIR  # reuse JSON extractor + prompts dir
 
 logger = get_logger(__name__)
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-MAX_RETRIES = int(os.environ.get("AGENT_MAX_RETRIES", "3"))
+DEFAULT_MODEL    = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MAX_RETRIES      = int(os.environ.get("AGENT_MAX_RETRIES", "3"))
+LLM_CALL_TIMEOUT = int(os.environ.get("LLM_CALL_TIMEOUT_SECONDS", "120"))
+
+_TRANSIENT_KEYWORDS = (
+    "quota", "rate", "429", "resource_exhausted",
+    "deadline", "unavailable", "503", "502", "500",
+    "timeout", "connection",
+)
 
 
-# Lazy SDK import — tests / Claude-only deployments shouldn't need the
-# `google-genai` package installed to import this module.
 try:
-    from google import genai as _genai  # new SDK
-    from google.genai import types as _genai_types  # noqa: F401 — kept for parity / future image use
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage, SystemMessage
 except ImportError:  # pragma: no cover
-    _genai = None
-    _genai_types = None
-
-
-class _TransientGeminiError(Exception):
-    """Internal: a retryable Gemini failure. Wrapped by tenacity below."""
+    ChatGoogleGenerativeAI = None  # type: ignore[assignment,misc]
+    HumanMessage = SystemMessage = None  # type: ignore[assignment,misc]
 
 
 class GeminiTool(Tool):
-    """Wrapped Gemini API client with retry + JSON-safe parsing.
+    """Gemini API client using langchain-google-genai with retry + JSON parsing.
 
-    Public surface matches `ClaudeTool` so agents can use either via the
-    same `tool.call(...)` / `tool.call_for_json(...)` API.
+    Public surface matches ``ClaudeTool`` so agents use either via the same
+    ``tool.call(...)`` / ``tool.call_for_json(...)`` API.
     """
 
     name = "gemini"
 
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
-        if _genai is None:
+        if ChatGoogleGenerativeAI is None:
             raise ToolError(
-                "The `google-genai` package isn't installed. Run: "
-                "pip install -r requirements.txt  (adds google-genai>=1.0.0)"
+                "The `langchain-google-genai` package isn't installed. "
+                "Run: pip install -r requirements.txt"
             )
-        api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        api_key = (
+            os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+        )
         if not api_key:
             raise ToolError(
                 "GOOGLE_API_KEY isn't set. Get a free key at "
                 "https://aistudio.google.com/ and add it to .env. "
                 "See .env.example for the exact line."
             )
-        try:
-            self._client = _genai.Client(api_key=api_key)
-        except Exception as e:  # noqa: BLE001 — surface as ToolError so orchestrator handles it
-            raise ToolError(f"Could not initialize Gemini client: {e}") from e
         self.model = model
-        # Same system_prompt source as ClaudeTool so both providers see
-        # identical agent-system context.
         self.system_prompt = (PROMPTS_DIR / "system_prompt.md").read_text(encoding="utf-8")
 
-    # ---------------------------------------------- public
+        try:
+            self._llm = ChatGoogleGenerativeAI(
+                model=model,
+                google_api_key=api_key,
+                temperature=0,
+                max_retries=MAX_RETRIES,
+                request_timeout=LLM_CALL_TIMEOUT,  # hard per-call HTTP timeout (seconds)
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ToolError(f"Could not initialise Gemini client: {exc}") from exc
+
+    # ---------------------------------------------- public interface
 
     def call(self, user_message: str, max_tokens: int = 4000) -> tuple[str, dict[str, Any]]:
         """Make a single Gemini API call. Returns (text, usage_dict)."""
-        return self._call_with_retry(user_message, max_tokens)
+        return self._call_internal(user_message, max_tokens)
 
     def call_for_json(self, user_message: str, max_tokens: int = 4000) -> tuple[dict, dict[str, Any]]:
         """Call Gemini and parse the response as JSON. Returns (parsed_dict, usage)."""
         text, usage = self.call(user_message, max_tokens=max_tokens)
-        # Reuse ClaudeTool's defensive JSON extractor — same logic applies
-        # to any provider that occasionally fences output with ```json.
         parsed = ClaudeTool._extract_json_block(text)
         return parsed, usage
 
-    # ---------------------------------------------- retry-wrapped raw call
+    # ---------------------------------------------- internal
 
-    @retry(
-        retry=retry_if_exception_type(_TransientGeminiError),
-        stop=stop_after_attempt(MAX_RETRIES),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        reraise=True,
-    )
-    def _call_with_retry(self, user_message: str, max_tokens: int) -> tuple[str, dict[str, Any]]:
+    def _call_internal(
+        self, user_message: str, max_tokens: int
+    ) -> tuple[str, dict[str, Any]]:
+        messages = [
+            SystemMessage(content=self.system_prompt),
+            HumanMessage(content=user_message),
+        ]
+
         try:
             from telemetry import child_span as _cs
         except ImportError:
-            from contextlib import nullcontext as _cs  # type: ignore[assignment]
+            import contextlib
+            def _cs(*_a, **_kw):  # type: ignore[misc]
+                return contextlib.nullcontext()
 
-        with _cs("llm.call", **{"llm.provider": "google", "llm.model": self.model,
-                                "llm.max_tokens": max_tokens}) as _llm_span:
-          try:
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=user_message,
-                config={
-                    "system_instruction": self.system_prompt,
-                    "max_output_tokens": max_tokens,
-                    "response_mime_type": "application/json",
-                },
-            )
-          except Exception as e:  # noqa: BLE001 — Gemini's exception taxonomy is wide
-            msg = str(e).lower()
-            # Classify: transient (quota / rate / 5xx / network) vs permanent (auth, invalid).
-            if any(t in msg for t in (
-                "quota", "rate", "429", "resource_exhausted",
-                "deadline", "unavailable", "503", "502", "500",
-                "timeout", "connection",
-            )):
-                raise _TransientGeminiError(f"Gemini transient error: {e}") from e
-            raise ToolError(f"Gemini API error: {e}") from e
+        with _cs("llm.call", **{
+            "llm.provider":   "google",
+            "llm.model":      self.model,
+            "llm.max_tokens": max_tokens,
+        }) as _span:
+            try:
+                # max_output_tokens is the Gemini parameter name
+                response = self._llm.bind(max_output_tokens=max_tokens).invoke(messages)
+            except Exception as exc:
+                msg = str(exc).lower()
+                if any(kw in msg for kw in _TRANSIENT_KEYWORDS):
+                    raise ToolError(f"Gemini transient error: {exc}") from exc
+                raise ToolError(f"Gemini API error: {exc}") from exc
 
-          # New SDK exposes the joined text on `response.text`.
-          text = getattr(response, "text", "") or ""
-          usage = {"input_tokens": None, "output_tokens": None}
-          um = getattr(response, "usage_metadata", None)
-          if um is not None:
-              usage = {
-                  "input_tokens": getattr(um, "prompt_token_count", None),
-                  "output_tokens": getattr(um, "candidates_token_count", None),
-              }
-          try:
-              _llm_span.set_attribute("llm.tokens_in",  usage.get("input_tokens")  or 0)
-              _llm_span.set_attribute("llm.tokens_out", usage.get("output_tokens") or 0)
-          except Exception:  # noqa: BLE001
-              pass
-          return text, usage
+            # ---- Extract text ----
+            raw = response.content
+            text = raw if isinstance(raw, str) else str(raw or "")
+
+            # ---- Extract usage ----
+            # langchain-google-genai stores token counts under usage_metadata
+            meta  = getattr(response, "response_metadata", {}) or {}
+            udata = meta.get("usage_metadata", {}) or {}
+            usage: dict[str, Any] = {
+                "input_tokens":  udata.get("prompt_token_count"),
+                "output_tokens": udata.get("candidates_token_count"),
+            }
+
+            try:
+                _span.set_attribute("llm.tokens_in",  usage["input_tokens"]  or 0)
+                _span.set_attribute("llm.tokens_out", usage["output_tokens"] or 0)
+            except Exception:  # noqa: BLE001
+                pass
+
+            return text, usage

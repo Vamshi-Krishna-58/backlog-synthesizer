@@ -1,0 +1,32 @@
+{
+  "run_id": "20260611_113210_0ee1ae",
+  "timestamp": "20260611_113210",
+  "user_id": "contributor",
+  "source_label": "meeting_notes.txt",
+  "elapsed_seconds": 20.554992290999508,
+  "epic_count": 0,
+  "story_count": 0,
+  "dup_count": 0,
+  "gap_count": 0,
+  "conflict_count": 0,
+  "model": "gemini-2.5-flash",
+  "models": {
+    "parser": "gemini-2.5-flash",
+    "constraint": "gemini-2.5-flash",
+    "story_writer": "gemini-2.5-flash",
+    "epic_decomposer": "gemini-2.5-flash",
+    "gap_detector": "gemini-2.5-flash"
+  },
+  "token_usage": {
+    "total": {
+      "input": 0,
+      "output": 0
+    }
+  },
+  "cost_usd": 0.0,
+  "outputs": {
+    "synthesis_json": "/Users/v.vamshi.krishna.s/Downloads/RDE-BackLog/backlog-synthesizer/outputs/contributor/20260611_113210/synthesis.json",
+    "synthesis_md": "/Users/v.vamshi.krishna.s/Downloads/RDE-BackLog/backlog-synthesizer/outputs/contributor/20260611_113210/synthesis.md",
+    "audit_md": "/Users/v.vamshi.krishna.s/Downloads/RDE-BackLog/backlog-synthesizer/outputs/contributor/20260611_113210/audit_trail.md"
+  }
+}

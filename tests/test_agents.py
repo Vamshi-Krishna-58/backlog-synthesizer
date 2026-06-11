@@ -325,7 +325,7 @@ def test_gap_detector_writes_duplicates_conflicts_and_gaps(memory, audit):
     # come from the local cosine similarity (different `reason` text) or
     # don't surface at all when the strings aren't close enough.
     agent = GapDetectorAgent(
-        claude=fake, jira=FakeJira(), github=FakeGithub(),
+        claude=fake, jira=FakeJira(),
         memory=memory, audit=audit,
         use_embeddings_for_duplicates=False,
     )
@@ -344,7 +344,7 @@ def test_gap_detector_skips_when_no_stories(memory, audit):
     fake = FakeClaudeTool({})
 
     agent = GapDetectorAgent(
-        claude=fake, jira=FakeJira(), github=FakeGithub(),
+        claude=fake, jira=FakeJira(),
         memory=memory, audit=audit,
     )
     agent.run()
@@ -396,18 +396,44 @@ def _patch_requests(monkeypatch, get_resp=None, post_resp=None):
         monkeypatch.setattr(requests, "post", lambda *a, **kw: post_resp)
 
 
+def _make_fake_chat_ollama(content: str, input_tokens: int = 50, output_tokens: int = 20):
+    """Return a fake ChatOllama class that returns *content* from invoke()."""
+    from langchain_core.messages import AIMessage
+
+    class _FakeChatOllama:
+        def __init__(self, *a, **kw):
+            self._model = kw.get("model", "")
+
+        def invoke(self, messages, **kw):
+            return AIMessage(
+                content=content,
+                response_metadata={
+                    "prompt_eval_count": input_tokens,
+                    "eval_count": output_tokens,
+                },
+            )
+
+    return _FakeChatOllama
+
+
+def _patch_ollama_health(monkeypatch):
+    """Mock the requests.get health-check so OllamaTool.__init__ succeeds."""
+    import requests as _r
+    monkeypatch.setattr(_r, "get", lambda *a, **kw: FakeOllamaResponse({"models": []}))
+
+
 def test_ollama_tool_call_for_json_success(monkeypatch):
     """OllamaTool.call_for_json parses the message content as JSON."""
-    import sys, json
+    import sys, json as _json
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from tools import ollama_tool
     from tools.ollama_tool import OllamaTool
 
-    health = FakeOllamaResponse({"models": []})
-    generation = FakeOllamaResponse({
-        "message": {"content": json.dumps({"summary": "ok", "topics": []})},
-        "prompt_eval_count": 50, "eval_count": 20,
-    })
-    _patch_requests(monkeypatch, get_resp=health, post_resp=generation)
+    _patch_ollama_health(monkeypatch)
+    fake_cls = _make_fake_chat_ollama(
+        _json.dumps({"summary": "ok", "topics": []}), input_tokens=50, output_tokens=20
+    )
+    monkeypatch.setattr(ollama_tool, "ChatOllama", fake_cls)
 
     tool = OllamaTool(model="llama3.1", base_url="http://localhost:11434")
     parsed, usage = tool.call_for_json("test prompt")
@@ -418,19 +444,22 @@ def test_ollama_tool_call_for_json_success(monkeypatch):
 
 def test_ollama_tool_strips_ollama_prefix(monkeypatch):
     """The 'ollama/' prefix is stripped before the API call."""
-    import sys, requests as _r
+    import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from tools import ollama_tool
     from tools.ollama_tool import OllamaTool
 
-    captured = {}
-    def fake_post(url, json=None, **kw):
-        captured["model"] = (json or {}).get("model")
-        return FakeOllamaResponse({
-            "message": {"content": "{}"},
-            "prompt_eval_count": 1, "eval_count": 1,
-        })
-    monkeypatch.setattr(_r, "get", lambda *a, **kw: FakeOllamaResponse({"models": []}))
-    monkeypatch.setattr(_r, "post", fake_post)
+    _patch_ollama_health(monkeypatch)
+    captured: dict = {}
+    from langchain_core.messages import AIMessage
+
+    class _CaptureChatOllama:
+        def __init__(self, *a, **kw):
+            captured["model"] = kw.get("model", "")
+        def invoke(self, messages, **kw):
+            return AIMessage(content="{}", response_metadata={})
+
+    monkeypatch.setattr(ollama_tool, "ChatOllama", _CaptureChatOllama)
 
     OllamaTool(model="ollama/llama3.1").call("hi")
     assert captured["model"] == "llama3.1"
@@ -453,16 +482,15 @@ def test_ollama_tool_raises_when_server_unreachable(monkeypatch):
 
 def test_ollama_tool_handles_fenced_json(monkeypatch):
     """_extract_json_block is used when the model wraps output in ```json."""
-    import sys, requests as _r
+    import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from tools import ollama_tool
     from tools.ollama_tool import OllamaTool
 
+    _patch_ollama_health(monkeypatch)
     fenced = '```json\n{"stories": []}\n```'
-    monkeypatch.setattr(_r, "get", lambda *a, **kw: FakeOllamaResponse({"models": []}))
-    monkeypatch.setattr(_r, "post", lambda *a, **kw: FakeOllamaResponse({
-        "message": {"content": fenced},
-        "prompt_eval_count": 5, "eval_count": 5,
-    }))
+    fake_cls = _make_fake_chat_ollama(fenced, input_tokens=5, output_tokens=5)
+    monkeypatch.setattr(ollama_tool, "ChatOllama", fake_cls)
 
     parsed, _ = OllamaTool(model="llama3.1").call_for_json("test")
     assert parsed == {"stories": []}

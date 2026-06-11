@@ -1,337 +1,241 @@
-# Backlog Synthesizer — Operator Runbook
+# Backlog Synthesizer — Operations Runbook
 
-This is the playbook for the on-call / first-responder when something
-goes wrong. It is deliberately *prescriptive*: read top-to-bottom, run
-the commands, escalate if you reach the end without resolution.
-
-Scope: the multi-agent CLI (`python src/main.py`), the Streamlit UI
-(`streamlit run app.py`), and the eval suite
-(`python evaluation/run_evaluation.py`).
+> **Audience:** On-call engineers and SREs.  
+> **Last reviewed:** 2026-06-10
 
 ---
 
-## 1. Startup, shutdown, restart
+## 1. Service overview
 
-### Local — CLI mode
-
-```bash
-# One-shot synthesis
-python src/main.py \
-    --transcript samples/meeting_notes.txt \
-    --constraints samples/architecture_constraints.md \
-    --backlog samples/jira_backlog.json
-```
-
-Outputs land under `outputs/<timestamp>/`. No long-running process to
-manage in CLI mode — each invocation runs once and exits.
-
-### Local — UI mode
-
-```bash
-streamlit run app.py
-# defaults to http://localhost:8501
-```
-
-To stop: `Ctrl-C` in the terminal, or `pkill -f "streamlit run"`.
-
-### Docker
-
-```bash
-docker build -t backlog-synthesizer:latest .
-docker run -d --name bs \
-  -p 8501:8501 \
-  --env-file .env \
-  -v "$PWD/outputs:/app/outputs" \
-  backlog-synthesizer:latest
-
-docker stop bs   # graceful — Streamlit handles SIGTERM
-docker start bs  # restart in place
-docker rm -f bs  # nuke
-```
-
-The `outputs/` volume mount preserves run artifacts across container
-restarts. If you don't mount it, every container restart loses prior runs.
+| Item | Value |
+|---|---|
+| Runtime | Python 3.11, Streamlit, LangGraph |
+| Container | `backlog-synthesizer:latest` (multi-stage, non-root `appuser`) |
+| Health endpoint | `GET /_stcore/health` → HTTP 200 |
+| Metrics endpoint | `GET :9090/metrics` (Prometheus scrape) |
+| Persistent data | `LOGS_DIR` + `OUTPUTS_DIR` (Azure Files share / EFS volume mount) |
+| Auth | Microsoft Entra SSO (primary) · YAML password file (fallback) |
+| LLM providers | Anthropic Claude (primary) · Google Gemini (balanced/free) · Ollama (local) |
 
 ---
 
-## 2. Health checks
+## 2. Alert runbook
 
-### UI mode
+### 2.1 `SecurityFinding` alert — injection / PII / toxicity
 
-```bash
-curl -f http://localhost:8501/_stcore/health
-# 200 OK = healthy
-```
+**Trigger:** `post_security_alert` fired one or more `error`-severity findings.  
+**Source:** Slack/Teams webhook or PagerDuty (configured via `SECURITY_WEBHOOK_URL` / `PAGERDUTY_ROUTING_KEY`).
 
-### CLI mode
-
-There is no daemon to probe. A successful synthesis prints a summary
-block ending with `Synthesis: outputs/<timestamp>/synthesis.md`.
-Exit code 0 = success. Non-zero codes:
-- `2` — input file couldn't be read (bad path, unsupported extension)
-- `3` — orchestrator failed unexpectedly (check logs for traceback)
-
-### Agent-level health
-
-The audit log (`outputs/<timestamp>/audit_trail.md`) records each agent's
-`started` and `completed` events. Missing `completed` = that agent
-errored; check the orchestrator log line for which one.
+**Response:**
+1. Open the audit log (`AUDIT_DB_PATH`, default `logs/audit_chain.db`) and filter by `run_id` from the alert payload.
+2. Look for `injection_scan_findings` or `output_security_finding` records — they contain the full finding details.
+3. If the finding is `injection_*`: the offending text was already redacted before reaching any LLM. No further action unless this is a coordinated attack pattern — consider blocking the user.
+4. If the finding is `pii_*` or `toxicity_*`: check whether the story was published to Jira. If so, delete or redact it there immediately. Notify the data owner.
+5. If `bias_*` (severity `warn`): raise in the next sprint review; no immediate action required.
+6. Escalate to the security team if `injection_*` findings recur from the same user within 1 hour.
 
 ---
 
-## 3. Common failures and what to do
+### 2.2 Circuit breaker OPEN — `anthropic` or `google`
 
-### "ANTHROPIC_API_KEY isn't set"
+**Symptom:** `Circuit breaker OPEN for anthropic after N consecutive failure(s)` in logs.  
+**Impact:** All new synthesis runs using that provider fast-fail until the breaker recovers (default 60 s probe window).
 
-The agent's `ClaudeTool` couldn't find a key.
+**Response:**
+1. Check `LLM_ERRORS_TOTAL` in Prometheus for the failing provider.
+2. Verify API key validity: `curl -H "x-api-key: $ANTHROPIC_API_KEY" https://api.anthropic.com/v1/models`.
+3. Check the provider's status page (status.anthropic.com / status.cloud.google.com).
+4. If the key is rotated in the platform secrets manager, restart the container to pick up the new value: `kubectl rollout restart deployment/backlog-synthesizer` or `az containerapp update --name … --revision-weight latest=100`.
+5. The breaker self-heals after `CB_RECOVERY_TIMEOUT_SEC` (default 60 s). No manual reset needed unless the API key is genuinely invalid.
 
+---
+
+### 2.3 Budget exceeded — user blocked
+
+**Symptom:** User sees "Daily budget exceeded" in the UI.  
+**Impact:** Single user blocked; other users unaffected.
+
+**Response:**
+1. Verify Redis spend counter: `redis-cli HGETALL budget:<user_id>:<YYYYMMDD>`.
+2. If the block is a false positive (Redis data corruption): `redis-cli DEL budget:<user_id>:<YYYYMMDD>` to reset the counter.
+3. To raise the per-user daily limit, update `DAILY_BUDGET_USD` in `ui/run_history.py` and redeploy, or set the env var if it has been extracted.
+4. If `REDIS_REQUIRED=1` and Redis is down: the app will have refused to start. Restore Redis before restarting.
+
+---
+
+### 2.4 Container OOM / slow synthesis
+
+**Symptom:** Container restarted (`OOMKilled`), or synthesis takes > 10 min.
+
+**Response:**
+1. Check `ACTIVE_SYNTHESIS` gauge in Prometheus — if it equals `MAX_CONCURRENT_SYNTHESES`, the semaphore is saturated; users are queuing.
+2. Scale out: increase replica count or raise `MAX_CONCURRENT_SYNTHESES` (CPU/RAM permitting).
+3. Check `SYNTHESIS_DURATION_SECONDS` histogram — p99 > 300 s indicates LLM timeout or infinite retry loop. Verify `LLM_CALL_TIMEOUT_SECONDS` (default 120 s) is propagated.
+4. If OOMKilled: the sentence-transformer model loads ~500 MB. Ensure container memory limit ≥ 2 GB. The warm-up runs at image build time (`src/warmup.py`); a cold-start with no warm-up layer doubles the load time.
+
+---
+
+### 2.5 Startup failure — missing env var
+
+**Symptom:** Container exits immediately with `Configuration error: Missing required environment variable(s)`.
+
+**Response:**
+1. Check container logs for the missing variable name.
+2. Set the missing secret in the platform secrets manager (Azure Key Vault / AWS Secrets Manager).
+3. Redeploy or restart — the startup check runs at boot and will pass once the var is present.
+4. **Never** commit secrets to `.env` in the repo. Use `.env.example` as the template for local dev.
+
+---
+
+### 2.6 Audit log full / SQLite locked
+
+**Symptom:** `database is locked` or `disk full` errors in logs.
+
+**Response:**
+1. Check disk usage on the persistent volume (`df -h /app`).
+2. Manually trigger retention purge (if `AUDIT_LOG_RETENTION_DAYS` is set):
+   ```python
+   from memory.audit_log import AuditLog
+   AuditLog.purge_old_runs()
+   ```
+3. If `AUDIT_LOG_RETENTION_DAYS=0` (keep forever): set a non-zero value and redeploy, or manually run the purge above.
+4. If disk is full on the volume: expand it in the cloud portal and restart the app.
+
+---
+
+## 3. Rollback procedure
+
+### Rolling back a bad deploy
+
+**Azure Container Apps:**
 ```bash
-# Confirm
-grep ANTHROPIC_API_KEY .env
-# If missing, copy from the example
-cp .env.example .env
-# Then edit .env and paste the real key
+# List revisions
+az containerapp revision list --name backlog-synthesizer --resource-group <rg> -o table
+
+# Activate a previous revision
+az containerapp revision activate \
+  --name backlog-synthesizer --resource-group <rg> \
+  --revision <previous-revision-name>
+
+# Shift 100% of traffic to it
+az containerapp ingress traffic set \
+  --name backlog-synthesizer --resource-group <rg> \
+  --revision-weight <previous-revision-name>=100
 ```
 
-Inside Docker: ensure you passed `--env-file .env` to `docker run`.
-
-### "anthropic.RateLimitError"
-
-You hit the Anthropic per-minute rate limit. The Claude tool retries
-with exponential backoff (tenacity) up to 3 attempts. If it still
-fails:
-- Wait 60 seconds and re-run.
-- If hitting it repeatedly, check the [Anthropic console](https://console.anthropic.com/)
-  for your account's rate-limit tier and request an increase.
-
-### "memory.store: sentence-transformers not installed — falling back to no-embedding mode"
-
-The vector memory engine is in degraded mode. Synthesis still runs but
-the Gap Detector skips semantic ticket retrieval (it falls back to
-considering all tickets, which is fine for ≤30 tickets but doesn't
-scale).
-
+**AWS ECS:**
 ```bash
-pip install sentence-transformers
-# or for a full re-install
-pip install -r requirements.txt
+# List recent task definitions
+aws ecs list-task-definitions --family-prefix backlog-synthesizer --sort DESC
+
+# Update service to previous task definition
+aws ecs update-service \
+  --cluster <cluster> --service backlog-synthesizer \
+  --task-definition backlog-synthesizer:<previous-revision-number>
 ```
-
-In Docker this should never happen — the image builds with
-sentence-transformers pre-installed.
-
-### "Pipeline failed: No JSON object found in model output"
-
-The LLM returned prose instead of JSON. `ClaudeTool.call_for_json` does
-defensive parsing (handles fenced / prose-wrapped output), so this is
-rare. When it happens:
-- Re-run — most failures are transient.
-- If reproducible: inspect the bad response. Add a logging line
-  (`logger.warning("Bad JSON response: %s", text)`) in
-  `tools/claude_tool.py` and re-run to capture what came back.
-- If the prompt was the cause, see Section 9 (Updating prompts safely).
-
-### "AgentError: <Agent> LLM call failed"
-
-The named agent's Claude call failed after retries. The orchestrator
-records the failure and skips downstream agents that depend on it:
-- Parser failure → Story Writer is skipped → Epic Decomposer skipped → Gap Detector skipped
-- Constraint Extractor failure → does NOT block downstream (constraints are advisory)
-- Story Writer failure → Epic Decomposer + Gap Detector skipped
-- Epic Decomposer failure → Gap Detector still runs (operates on stories, not epics)
-- Gap Detector failure → synthesis still ships, just with no gap/conflict/duplicate detection
-
-Partial synthesis is still written to `outputs/<timestamp>/`.
 
 ---
 
 ## 4. Key rotation
 
-### Anthropic key
+### 4.1 Automated rotation check
 
-1. Create the new key in the Anthropic console first.
-2. Update `.env` with the new key.
-3. If running in Docker: `docker stop bs && docker rm bs && docker run -d ...` (with `--env-file .env`).
-4. Verify the next synthesis succeeds.
-5. Only then, **revoke** the old key in the console.
+A GitHub Actions workflow (`.github/workflows/secret-rotation-check.yml`) runs **every Monday at 08:00 UTC** and:
 
-This order — issue new, swap in, verify, revoke old — avoids a window
-where neither key works.
+- Makes a lightweight API call to each configured provider to verify the key is still accepted
+- Checks Azure Key Vault for secrets expiring within 14 days (if `AZURE_KEY_VAULT_NAME` is set)
+- Posts a Slack/Teams alert to `SECURITY_WEBHOOK_URL` on failure
+- Opens a GitHub issue automatically if `ANTHROPIC_API_KEY` is invalid
 
-### .env.example consistency
-
-After any new env var is added, update `.env.example` so a fresh clone
-knows what to fill in. The CI Docker build verifies the image starts
-but doesn't verify your `.env` has every required var.
+Trigger manually after any suspected credential leak:  
+`Actions → Secret rotation check → Run workflow`
 
 ---
 
-## 5. Audit log interpretation
+### 4.2 Rotation schedule
 
-Each run produces an `audit_trail.md` under `outputs/<timestamp>/`.
-Read top-to-bottom; it's chronological. Every agent emits at minimum:
-- A `started` event with input characteristics (char count, topic count, etc.)
-- A `tool_call` event per Claude invocation (with prompt-char count, response excerpt, token usage)
-- A `completed` event with what was written to memory
+| Secret | Recommended max age | Last rotation field |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | 90 days | Track in your secrets manager |
+| `GOOGLE_API_KEY` | 90 days | Track in your secrets manager |
+| `ENTRA_CLIENT_SECRET` | 180 days (Azure default max) | Set expiry in App Registration |
+| `AUTH_COOKIE_SECRET` | 365 days (invalidates all sessions) | Track in your secrets manager |
+| `JIRA_API_TOKEN` | 90 days | Track in your secrets manager |
+| `PAGERDUTY_ROUTING_KEY` | 365 days | Track in PagerDuty console |
 
-### When the synthesis looks wrong
-
-- **Too many stories** → Story Writer's `completed` event will show the
-  count. If it's clearly out of proportion to the topics (say, 10
-  stories from 2 topics), the prompt drifted or the model
-  over-generated. Check `prompts/story_writer_prompt.md` — was it
-  edited recently?
-- **A topic the user expected is missing** → Parser's `completed` event
-  lists topic IDs. If it's not there, Parser missed it. Re-read the
-  transcript — sometimes the topic was implicit and the parser
-  reasonably skipped it.
-- **A duplicate / conflict that should have fired didn't** → Gap
-  Detector's audit entry shows which existing tickets were considered
-  for each story (`indexed_tickets` event). If the expected match isn't
-  in the candidate list, the semantic-retrieval cutoff filtered it
-  out. Re-run with a smaller backlog (or temporarily lower `TOP_K` in
-  `gap_detector_agent.py`).
-
-### Run metadata
-
-Every run captures a header in `audit_trail.md` with:
-- Timestamp (UTC)
-- Input character counts per source
-- Total token usage across all agents
-- Final synthesis counts (epics, stories, gaps, conflicts, duplicates)
+> Tip: set an expiry date on each secret in Azure Key Vault / AWS Secrets Manager. The weekly CI job will warn 14 days before expiry.
 
 ---
 
-## 6. Cost spike playbook
+### 4.3 Rotation procedure
 
-Cost per run on Claude Sonnet (current pricing): roughly $0.10–0.30 for
-the bundled sample. The eval suite (4 cases) is $1–2 per full pass.
-
-### When a run takes > $1
-
-```bash
-grep "tokens_used" outputs/<timestamp>/audit_trail.md
-```
-
-This lists per-agent token usage. The usual suspects:
-- **Parser** with a giant transcript → trim the transcript before re-running.
-- **Story Writer** when there are too many topics → tighten the
-  Parser's prompt to consolidate topics; or run with `--dry-run` first
-  to see topic count.
-- **Gap Detector** with a huge backlog → it embeds every existing
-  ticket. > 500 tickets makes this expensive. Pre-filter before
-  passing to the synthesizer.
-
-### When eval cost is unexpectedly high
-
-The eval CI job runs on push-to-main and on workflow_dispatch. If it's
-firing more than expected, check `.github/workflows/ci.yml` and verify
-the gating logic. The `eval-suite` job is the only one that burns API
-credit.
-
----
-
-## 7. Adding a new LLM provider
-
-This project is intentionally Claude-only — the multi-agent pattern
-assumed a single high-quality reasoner. If you must add another:
-
-1. Add a new `tools/<provider>_tool.py` implementing the `Tool` base
-   class with at minimum `call_for_json(prompt, max_tokens) → (dict, usage)`.
-2. Mirror `ClaudeTool`'s tenacity retry decorator.
-3. Wire it into `Orchestrator.__init__` so agents can pick by name.
-4. Update prompts — Claude responds well to direct JSON instructions;
-   other models may need stricter formatting (json mode, explicit
-   "return JSON" directives, etc.).
-5. Add at least one unit test in `tests/` that mocks the new tool.
-6. Add a costing entry — eval cost varies by provider.
-
----
-
-## 8. Disaster recovery
-
-### Lost outputs/ directory
-
-Outputs are reproducible — re-run the synthesizer against the same
-inputs. Output is not deterministic (LLMs aren't) but should be
-materially similar. Each run is timestamped, so re-runs don't overwrite.
-
-### Lost golden dataset
-
-`evaluation/golden_dataset/` is checked into git. Restore from git.
-
-### Lost .env
-
-```bash
-cp .env.example .env
-# Re-paste your API key from a secrets manager (1Password, Bitwarden, etc.)
-# NEVER commit .env — it's in .gitignore for a reason.
-```
-
-### Container image broken / missing
-
-```bash
-docker build -t backlog-synthesizer:latest .
-```
-
-The CI workflow runs this same build on every push to main, so a known-
-good Dockerfile is always reachable via `git checkout main`.
-
----
-
-## 9. Updating prompts safely
-
-Prompts live in `prompts/*.md`. Each is loaded by exactly one agent at
-init time. Updating a prompt is a real code change:
-
-1. **Branch first.** Never edit prompts on main.
-2. **Run the eval suite** before and after:
-   ```bash
-   python evaluation/run_evaluation.py > before.txt
-   # edit the prompt
-   python evaluation/run_evaluation.py > after.txt
-   diff before.txt after.txt
-   ```
-3. If the eval suite regresses (any case that passed before now fails),
-   either roll back the prompt or update the case if the new behavior
-   is actually correct.
-4. Commit the prompt change AND any eval-case adjustment together.
-
----
-
-## 10. Quick reference — file locations
-
-| What | Where |
+| Secret | Rotation steps |
 |---|---|
-| CLI entry | `src/main.py` |
-| Streamlit UI entry | `app.py` |
-| Orchestrator | `src/orchestrator.py` |
-| Agents | `src/agents/*.py` |
-| Tools | `src/tools/*.py` |
-| Memory + audit log | `src/memory/*.py` |
-| PII redactor | `src/redactor.py` |
-| Prompts (one per agent) | `prompts/*.md` |
-| Sample inputs | `samples/*.{txt,md,json}` |
-| Golden dataset | `evaluation/golden_dataset/` |
-| Metrics + LLM-as-judge | `evaluation/{metrics,llm_as_judge}.py` |
-| Eval runner | `evaluation/run_evaluation.py` |
-| Run outputs | `outputs/<timestamp>/` |
-| Unit tests | `tests/` |
-| CI workflow | `.github/workflows/ci.yml` |
-| Dockerfile | `Dockerfile` |
-| Architecture diagram | `architecture.md` |
+| `ANTHROPIC_API_KEY` | Generate new key at console.anthropic.com → update platform secret → restart container → re-run rotation check workflow to confirm |
+| `GOOGLE_API_KEY` | Rotate at console.cloud.google.com → update secret → restart → confirm |
+| `ENTRA_CLIENT_SECRET` | Add a new secret value in Azure App Registration → update Key Vault → restart → delete old secret value |
+| `AUTH_COOKIE_SECRET` | Generate: `python -c "import secrets; print(secrets.token_hex(32))"` → update secret → restart (all active sessions are invalidated — users must log in again) |
+| `JIRA_API_TOKEN` | Revoke at id.atlassian.com → generate new → update secret → restart → confirm |
+
+**Zero-downtime rotation for `ANTHROPIC_API_KEY`:**  
+Set the new key in your secrets manager first. Then do a rolling restart (Container Apps revision or ECS rolling deploy) — old pods use the old key until they are replaced; new pods pick up the new key from the environment at startup. There is no window where both keys need to be valid simultaneously.
 
 ---
 
-## 11. When you don't know what to do
+## 5. Useful queries
 
-1. Read the audit log for the failing run — it's chronological and tells
-   you which agent broke.
-2. Re-run with `--dry-run` to confirm inputs load correctly without
-   spending API credit.
-3. Run the unit suite (`pytest tests/`) — if it fails, the regression
-   is in the code, not the inputs.
-4. Check `git log -5 --oneline` for recent changes.
-5. If still stuck, capture: the failing `audit_trail.md`, the input
-   files, and the exact error / traceback. File an issue with all three.
-   Do NOT paste raw `.env` content into an issue.
+### Prometheus
+
+```promql
+# Current active syntheses
+backlog_active_syntheses
+
+# Error rate (last 5 min)
+rate(backlog_llm_errors_total[5m])
+
+# p95 synthesis latency
+histogram_quantile(0.95, rate(backlog_synthesis_duration_seconds_bucket[10m]))
+
+# Total cost today
+increase(backlog_synthesis_cost_usd_total[24h])
+```
+
+### Audit log (SQLite)
+
+```sql
+-- Last 10 security findings
+SELECT run_id, agent, action, payload, ts
+FROM audit_log
+WHERE action IN ('injection_scan_findings', 'output_security_finding')
+ORDER BY ts DESC LIMIT 10;
+
+-- Syntheses per user today
+SELECT user_email, COUNT(*) AS runs
+FROM audit_log
+WHERE action = 'pipeline_completed'
+  AND ts >= date('now', 'start of day')
+GROUP BY user_email ORDER BY runs DESC;
+```
+
+---
+
+## 6. On-call contacts
+
+| Role | Contact |
+|---|---|
+| Primary on-call | Rotate per team schedule in PagerDuty |
+| Security incidents | security@yourcompany.com (P1 only) |
+| Data/GDPR concerns | dpo@yourcompany.com |
+| LLM provider issues | Anthropic support · Google Cloud support |
+
+---
+
+## 7. Disaster recovery
+
+| Scenario | RTO | RPO | Procedure |
+|---|---|---|---|
+| Single container crash | < 2 min | 0 (stateless) | Health check triggers automatic restart |
+| Bad deploy | < 5 min | 0 | Rollback via previous container revision (§3) |
+| Redis failure (budget store) | < 1 min | budget counters reset | Remove `REDIS_REQUIRED`, restart — falls back to file-based |
+| Persistent volume corruption | < 30 min | last backup | Restore from volume snapshot; audit log and outputs are the only persistent state |
+| Full region outage | < 60 min | last cross-region backup | Re-deploy to secondary region using the same image digest |

@@ -7,6 +7,8 @@ bypassing MSAL for reliability with new Entra ID tenants.
 from __future__ import annotations
 
 import os
+import threading
+import time
 import urllib.parse
 from typing import Any
 
@@ -25,13 +27,101 @@ _SCOPES       = "openid profile"   # email scope removed — causes issues on so
 
 _ENTRA_ENABLED = bool(TENANT_ID and CLIENT_ID and CLIENT_SECRET)
 
+# ---- JWKS cache ---------------------------------------------------------------
+# Microsoft rotates signing keys rarely; caching for 1 hour avoids repeated
+# network round-trips while still picking up rotations within a reasonable window.
+_JWKS_CLIENT_LOCK = threading.Lock()
+_JWKS_CLIENT: Any = None
+_JWKS_CLIENT_TS: float = 0.0
+_JWKS_TTL = 3600.0  # seconds
+
+
+def _get_jwks_client() -> Any:
+    """Return a cached PyJWKClient, refreshing after _JWKS_TTL seconds."""
+    global _JWKS_CLIENT, _JWKS_CLIENT_TS
+    now = time.monotonic()
+    with _JWKS_CLIENT_LOCK:
+        if _JWKS_CLIENT is None or now - _JWKS_CLIENT_TS > _JWKS_TTL:
+            from jwt import PyJWKClient  # PyJWT[cryptography]
+            jwks_uri = (
+                f"https://login.microsoftonline.com/{_TENANT_REF}/discovery/v2.0/keys"
+            )
+            _JWKS_CLIENT = PyJWKClient(jwks_uri, lifespan=int(_JWKS_TTL))
+            _JWKS_CLIENT_TS = now
+        return _JWKS_CLIENT
+
+
+def _verify_id_token(token: str) -> dict:
+    """Verify the ID token signature, audience, issuer, and expiry via JWKS.
+
+    Fetches Microsoft's public keys and verifies the RS256 signature so a
+    forged JWT is rejected before any claims are trusted.  Raises ValueError
+    on any verification failure — callers must not admit the user if this raises.
+    """
+    try:
+        import jwt as _jwt  # PyJWT
+    except ImportError as exc:
+        raise ValueError(
+            "PyJWT[cryptography] is required for token verification. "
+            "Run: pip install 'PyJWT[cryptography]>=2.8.0'"
+        ) from exc
+
+    jwks_client = _get_jwks_client()
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Cannot retrieve signing key for token: {exc}") from exc
+
+    # Accept both v2.0 and v1.0 (sts.windows.net) issuers so the same code works
+    # with single-tenant apps regardless of which endpoint issued the token.
+    valid_issuers = {
+        f"https://login.microsoftonline.com/{TENANT_ID}/v2.0",
+        f"https://sts.windows.net/{TENANT_ID}/",
+    }
+
+    try:
+        claims = _jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=CLIENT_ID,
+            options={"verify_iss": False},  # issuer checked manually below
+        )
+    except _jwt.ExpiredSignatureError as exc:
+        raise ValueError("ID token has expired") from exc
+    except _jwt.InvalidTokenError as exc:
+        raise ValueError(f"ID token signature is invalid: {exc}") from exc
+
+    if claims.get("iss") not in valid_issuers:
+        raise ValueError(f"Untrusted token issuer: {claims.get('iss')!r}")
+
+    return claims
+
 
 def is_enabled() -> bool:
     return _ENTRA_ENABLED
 
 
-def get_auth_url(state: str = "backlog-synth") -> str:
-    """Build the Microsoft authorization URL directly."""
+def generate_state_nonce() -> str:
+    """Return a cryptographically random nonce for the OAuth2 `state` parameter.
+
+    The caller must store this value in the session before redirecting and
+    verify that the callback's `state` query-param matches before calling
+    `exchange_code_for_token`.  This prevents CSRF / authorization-code
+    injection attacks where an attacker substitutes their own code for the
+    legitimate user's code.
+    """
+    import secrets
+    return secrets.token_urlsafe(32)
+
+
+def get_auth_url(state: str) -> str:
+    """Build the Microsoft authorization URL.
+
+    `state` must be a per-session random nonce returned by
+    `generate_state_nonce()`.  Passing a fixed string defeats the CSRF
+    protection entirely.
+    """
     params = {
         "client_id":     CLIENT_ID,
         "response_type": "code",
@@ -58,32 +148,21 @@ def exchange_code_for_token(code: str) -> dict[str, Any]:
     return resp.json()
 
 
-def _decode_jwt_payload(token: str) -> dict:
-    """Decode the payload of a JWT without verification (for ID token claims)."""
-    import base64, json
-    try:
-        parts = token.split(".")
-        if len(parts) < 2:
-            return {}
-        payload = parts[1]
-        # Add padding
-        payload += "=" * (4 - len(payload) % 4)
-        return json.loads(base64.urlsafe_b64decode(payload))
-    except Exception:  # noqa: BLE001
-        return {}
-
-
 def parse_user(token_result: dict) -> dict[str, Any]:
-    """Extract user info and role from the token response."""
-    # Decode the ID token to get claims
-    id_token = token_result.get("id_token", "")
-    claims   = _decode_jwt_payload(id_token) if id_token else {}
+    """Verify the ID token and extract user info and role from claims.
 
-    # App roles come from the 'roles' claim.
-    # Compare case-insensitively — Azure may return "Admin" or "admin".
+    Raises ValueError if the ID token is missing or its signature cannot
+    be verified against Microsoft's JWKS endpoint.  The caller must not
+    store or trust the returned dict if this raises.
+    """
+    id_token = token_result.get("id_token", "")
+    if not id_token:
+        raise ValueError("Token response contains no id_token")
+
+    claims = _verify_id_token(id_token)
+
     roles = claims.get("roles") or []
     roles_lower = [r.lower() for r in roles]
-
     if "admin" in roles_lower:
         role = "admin"
     elif "contributor" in roles_lower:

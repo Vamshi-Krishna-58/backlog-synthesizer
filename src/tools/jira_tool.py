@@ -53,7 +53,7 @@ class JiraTool(Tool):
         api_token: str | None = None,
         project_key: str | None = None,
         page_size: int = 50,
-        max_results: int = 200,
+        max_results: int | None = None,
     ):
         self._fixture_path = Path(fixture_path) if fixture_path else DEFAULT_FIXTURE
         self._cache: list[dict] | None = None
@@ -67,7 +67,16 @@ class JiraTool(Tool):
         self._api_token = api_token or os.environ.get("JIRA_API_TOKEN") or ""
         self._project_key = project_key or os.environ.get("JIRA_PROJECT_KEY") or ""
         self._page_size = int(page_size)
-        self._max_results = int(max_results)
+        # JIRA_MAX_RESULTS: total issues to fetch across all pages.
+        # 0 or negative = no cap (fetch every page). Default 200 keeps costs
+        # predictable on large backlogs; set JIRA_MAX_RESULTS=0 to lift the cap.
+        _env_max = os.environ.get("JIRA_MAX_RESULTS")
+        if max_results is not None:
+            self._max_results = int(max_results)
+        elif _env_max is not None:
+            self._max_results = int(_env_max)
+        else:
+            self._max_results = 200
 
     @property
     def mode(self) -> Mode:
@@ -450,9 +459,9 @@ class JiraTool(Tool):
             data = resp.json()
             issues = data.get("issues", []) or []
             all_issues.extend(_normalise_issue(i) for i in issues)
-            if len(all_issues) >= self._max_results:
+            if self._max_results > 0 and len(all_issues) >= self._max_results:
                 all_issues = all_issues[: self._max_results]
-                logger.info("Jira search hit max_results=%d; capping.", self._max_results)
+                logger.info("Jira search hit max_results=%d cap; truncating.", self._max_results)
                 break
 
             # v3 /search/jql uses a cursor (nextPageToken) — present iff more.

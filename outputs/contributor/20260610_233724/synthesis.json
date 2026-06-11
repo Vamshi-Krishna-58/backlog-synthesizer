@@ -1,0 +1,445 @@
+{
+  "summary": "The Q3 planning meeting synthesized customer-facing problems, highlighting five key areas. These include POS system outages during peak hours requiring an offline mode, the mobile app's search functionality surfacing out-of-stock items, and significant customer confusion regarding pharmacy prescription refills due to disparate systems. Additionally, customers lack clarity on loyalty tier status changes, and there's a critical constraint regarding outdated store-associate handheld scanners running Android 7.",
+  "topics": [
+    {
+      "id": "T-01",
+      "theme": "pos-offline-mode",
+      "summary": "POS systems go completely offline during WAN outages, preventing even cash sales due to lack of local SKU pricing validation. This leads to lost revenue and customer dissatisfaction. There's a request to implement an offline mode for basic transactions, though card sales are constrained by PCI compliance.",
+      "raw_quote": "when the WAN drops, our POS goes fully offline \u2014 can't even process a cash sale because it can't validate the SKU pricing locally.",
+      "speaker": "Hiroshi",
+      "sentiment": "request"
+    },
+    {
+      "id": "T-02",
+      "theme": "mobile-app-search-inventory",
+      "summary": "The mobile app's search results frequently display out-of-stock items at the user's local store, causing customer frustration and negative NPS. This is due to search ranking not considering local inventory, inaccurate \"in stock\" badges, and late substitute suggestions. There's a request to integrate inventory into search ranking and show alternatives inline.",
+      "raw_quote": "People search for \"diapers size 4\" and the top three results are out of stock at their local store. They add to cart, check out, then get a sad \"we couldn't fulfill this\" email.",
+      "speaker": "Marcus",
+      "sentiment": "request"
+    },
+    {
+      "id": "T-03",
+      "theme": "pharmacy-refill-unification",
+      "summary": "Customers experience confusion and frustration when refilling prescriptions, as the in-app and IVR phone line refill flows write to separate, unreconciled systems, leading to pharmacies having no record of app-initiated refills. A unified refill record, clear status updates, and push notifications for ready prescriptions are requested, with HIPAA compliance as a constraint for notifications.",
+      "raw_quote": "The single biggest complaint to the pharmacy help line is \"I refilled my prescription in the app but the pharmacy says it isn't ready and they have no record.\" It's because we have TWO refill flows: the in-app one, and the IVR phone line. They write to different systems and the systems don't reconcile in real time.",
+      "speaker": "Anika",
+      "sentiment": "request"
+    },
+    {
+      "id": "T-04",
+      "theme": "loyalty-tier-clarity",
+      "summary": "Customers are confused about the rules for earning and losing loyalty tier status, particularly the timing of downgrades, which causes frustration. The need is for greater transparency in the app regarding tier progress and rules.",
+      "raw_quote": "Customers don't understand how they earn or lose tier status. They get a \"you're Gold!\" email and then 2 months later \"you've been downgraded to Silver\" and they're upset. The downgrade timing isn't clear from any customer-facing surface.",
+      "speaker": "Priya",
+      "sentiment": "concern"
+    },
+    {
+      "id": "T-05",
+      "theme": "store-handheld-scanner-constraint",
+      "summary": "Store-associate handheld inventory scanners are outdated, running Android 7 without security patches, and will not be replaced until FY26. This imposes a hardware capability constraint on any new tooling developed for store associates, which must be compatible with Android 7.",
+      "raw_quote": "The store-side handheld inventory scanners are running Android 7. They can't get security patches anymore. Replacement is approved for FY26 but we should make sure no new tooling we build assumes hardware capabilities Android 7 doesn't have.",
+      "speaker": "Hiroshi",
+      "sentiment": "observation"
+    }
+  ],
+  "constraints": [],
+  "epics": [
+    {
+      "id": "EP-01",
+      "title": "Store Systems & Operational Resilience",
+      "description": "This epic focuses on enhancing the reliability and functionality of critical in-store systems, including Point-of-Sale (POS) operations during network outages and ensuring compatibility of new store-associate tools with existing hardware infrastructure.",
+      "stories": [
+        {
+          "id": "ST-01",
+          "title": "Enable POS Offline Mode for Cash Sales",
+          "description": "Implement an offline mode for Point-of-Sale (POS) systems to allow basic cash transactions during WAN outages. This capability is specifically for cash sales, as card sales are noted in the source material as being constrained by PCI compliance and will remain online-only.",
+          "user_story": "As a store associate, I want the POS system to process cash sales during a WAN outage, so that we can continue serving customers and prevent lost revenue.",
+          "acceptance_criteria": [
+            "Given a store experiences a WAN outage, when a store associate attempts a cash sale, then the POS system successfully processes the transaction.",
+            "Given a store experiences a WAN outage, when a store associate attempts a card sale, then the POS system clearly indicates that card payments are unavailable.",
+            "Given WAN connectivity is restored, when offline cash transactions exist, then these transactions are automatically synchronized with central systems.",
+            "Given a WAN outage, when a store associate scans an item, then the POS system validates SKU pricing using locally cached data."
+          ],
+          "priority": "High",
+          "priority_rationale": "The current system's complete offline state during WAN outages directly leads to lost revenue and significant customer dissatisfaction, impacting critical store operations.",
+          "tags": [
+            "pos",
+            "offline-mode",
+            "payments"
+          ],
+          "source_topic_id": "T-01",
+          "potential_constraint_conflicts": [],
+          "evidence": [
+            {
+              "topic_id": "T-01",
+              "theme": "pos-offline-mode",
+              "raw_quote": "when the WAN drops, our POS goes fully offline \u2014 can't even process a cash sale because it can't validate the SKU pricing locally.",
+              "speaker": "Hiroshi",
+              "sentiment": "request"
+            }
+          ],
+          "tasks": [
+            {
+              "title": "Design and implement local data store for SKU pricing and product information on POS.",
+              "type": "data",
+              "id": "ST-01-TK-01"
+            },
+            {
+              "title": "Develop POS application logic for processing cash sales in offline mode.",
+              "type": "backend",
+              "id": "ST-01-TK-02"
+            },
+            {
+              "title": "Implement mechanism for storing offline cash transactions locally on POS.",
+              "type": "data",
+              "id": "ST-01-TK-03"
+            },
+            {
+              "title": "Develop synchronization service to upload offline transactions to central systems upon WAN restoration.",
+              "type": "backend",
+              "id": "ST-01-TK-04"
+            },
+            {
+              "title": "Implement POS UI/UX to clearly indicate card payment unavailability during WAN outages.",
+              "type": "frontend",
+              "id": "ST-01-TK-05"
+            },
+            {
+              "title": "Develop automated tests for offline cash transaction processing and online synchronization.",
+              "type": "qa",
+              "id": "ST-01-TK-06"
+            }
+          ]
+        },
+        {
+          "id": "ST-05",
+          "title": "Ensure New Store Associate Tools are Compatible with Android 7 Handheld Scanners",
+          "description": "Any new tooling developed for store associates must be compatible with existing handheld inventory scanners, which run Android 7 and will not be replaced until FY26. This story ensures that new capabilities can be deployed and utilized by store associates without requiring immediate hardware upgrades.",
+          "user_story": "As a store associate, I want new store-associate tools to be compatible with my current Android 7 handheld scanner, so that I can use them effectively without waiting for new hardware.",
+          "acceptance_criteria": [
+            "Given a new store-associate tool is developed, when it is deployed to an Android 7 handheld scanner, then it installs and functions correctly.",
+            "Given a new store-associate tool is developed, when it is deployed to an Android 7 handheld scanner, then it does not rely on hardware capabilities beyond what Android 7 supports.",
+            "Given a new store-associate tool is developed, when it is deployed to an Android 7 handheld scanner, then it meets acceptable performance standards for typical use cases."
+          ],
+          "priority": "Medium",
+          "priority_rationale": "Ensuring compatibility with existing hardware is crucial to avoid rework and enable the adoption of future store-associate tools, preventing delays in operational improvements.",
+          "tags": [
+            "store-associate",
+            "inventory"
+          ],
+          "source_topic_id": "T-05",
+          "potential_constraint_conflicts": [],
+          "evidence": [
+            {
+              "topic_id": "T-05",
+              "theme": "store-handheld-scanner-constraint",
+              "raw_quote": "The store-side handheld inventory scanners are running Android 7. They can't get security patches anymore. Replacement is approved for FY26 but we should make sure no new tooling we build assumes hardware capabilities Android 7 doesn't have.",
+              "speaker": "Hiroshi",
+              "sentiment": "observation"
+            }
+          ],
+          "tasks": [
+            {
+              "title": "Conduct a spike to identify specific Android 7 API limitations and performance considerations for common store-associate tool features.",
+              "type": "spike",
+              "id": "ST-05-TK-01"
+            },
+            {
+              "title": "Define and document technical guidelines and best practices for Android 7 compatibility for new store-associate tool development.",
+              "type": "infra",
+              "id": "ST-05-TK-02"
+            },
+            {
+              "title": "Set up and maintain an Android 7 test environment (physical devices or emulators) for compatibility testing.",
+              "type": "infra",
+              "id": "ST-05-TK-03"
+            },
+            {
+              "title": "Develop a comprehensive compatibility testing checklist for new store-associate tools on Android 7.",
+              "type": "qa",
+              "id": "ST-05-TK-04"
+            },
+            {
+              "title": "Integrate Android 7 compatibility checks and automated tests into the CI/CD pipeline for store-associate tools.",
+              "type": "infra",
+              "id": "ST-05-TK-05"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "EP-02",
+      "title": "Enhanced Customer Mobile Experience",
+      "description": "This epic focuses on improving the customer experience within the mobile app by providing more accurate inventory information, streamlining pharmacy refill processes, and increasing transparency around loyalty program status.",
+      "stories": [
+        {
+          "id": "ST-02",
+          "title": "Integrate Local Inventory into Mobile App Search and Display Alternatives",
+          "description": "Enhance the mobile app's search functionality to factor in local store inventory status when ranking results. For out-of-stock items, the system should accurately display 'in stock' badges and suggest available alternatives directly within the search results or product page.",
+          "user_story": "As a mobile app user, I want search results to accurately reflect local store inventory and suggest alternatives for out-of-stock items, so that I don't get frustrated by unfulfillable orders.",
+          "acceptance_criteria": [
+            "Given a user searches for an item, when the item is out of stock at their selected local store, then the search results do not rank the out-of-stock item as a top result.",
+            "Given a user views an item that is out of stock at their selected local store, when the item has available alternatives, then relevant alternatives are displayed inline.",
+            "Given a user searches for an item, when the item is in stock at their selected local store, then the search result displays an accurate 'in stock' badge.",
+            "Given a user adds an item to their cart that is out of stock at their selected local store, then the system prevents checkout or clearly notifies the user of the stock issue before checkout completion."
+          ],
+          "priority": "High",
+          "priority_rationale": "Frequent display of out-of-stock items in search leads to high customer frustration, negative NPS, and unfulfillable orders, directly impacting customer experience and operational efficiency.",
+          "tags": [
+            "mobile-app",
+            "inventory"
+          ],
+          "source_topic_id": "T-02",
+          "potential_constraint_conflicts": [],
+          "evidence": [
+            {
+              "topic_id": "T-02",
+              "theme": "mobile-app-search-inventory",
+              "raw_quote": "People search for \"diapers size 4\" and the top three results are out of stock at their local store. They add to cart, check out, then get a sad \"we couldn't fulfill this\" email.",
+              "speaker": "Marcus",
+              "sentiment": "request"
+            }
+          ],
+          "tasks": [
+            {
+              "title": "Develop or integrate API to retrieve real-time local store inventory status for mobile app.",
+              "type": "backend",
+              "id": "ST-02-TK-01"
+            },
+            {
+              "title": "Modify search service to incorporate local inventory status into search result ranking algorithm.",
+              "type": "backend",
+              "id": "ST-02-TK-02"
+            },
+            {
+              "title": "Implement mobile app UI to display 'in stock' badges and accurate inventory status on search results and product pages.",
+              "type": "frontend",
+              "id": "ST-02-TK-03"
+            },
+            {
+              "title": "Develop backend service to identify and suggest alternative products for out-of-stock items.",
+              "type": "backend",
+              "id": "ST-02-TK-04"
+            },
+            {
+              "title": "Implement mobile app UI to display suggested alternatives inline on product pages and potentially search results.",
+              "type": "frontend",
+              "id": "ST-02-TK-05"
+            },
+            {
+              "title": "Update checkout flow to validate cart items against local inventory and prevent/notify for out-of-stock items.",
+              "type": "backend",
+              "id": "ST-02-TK-06"
+            },
+            {
+              "title": "Develop comprehensive QA test cases for inventory-aware search, alternatives display, and checkout validation.",
+              "type": "qa",
+              "id": "ST-02-TK-07"
+            }
+          ]
+        },
+        {
+          "id": "ST-03",
+          "title": "Unify Pharmacy Prescription Refill Records and Notifications",
+          "description": "Unify the prescription refill processes from the mobile app and IVR phone line into a single, reconciled system. This includes providing clear status updates to customers and enabling push notifications for ready prescriptions, ensuring compliance with HIPAA regulations for all notification content.",
+          "user_story": "As a pharmacy customer, I want my prescription refill requests to be unified across all channels and receive clear status updates, so that I know when my prescription is ready without confusion.",
+          "acceptance_criteria": [
+            "Given a customer initiates a refill via the mobile app, when the pharmacy checks their system, then the refill request is visible and accurately recorded.",
+            "Given a customer initiates a refill via the IVR phone line, when the pharmacy checks their system, then the refill request is visible and accurately recorded.",
+            "Given a prescription is ready for pickup, when the customer has opted for notifications, then they receive a push notification with HIPAA-compliant content.",
+            "Given a customer views their prescription status in the mobile app, when the status changes (e.g., 'processing', 'ready for pickup'), then the app displays the updated status accurately."
+          ],
+          "priority": "High",
+          "priority_rationale": "The current fragmented refill system causes significant customer confusion, frustration, and operational issues for pharmacies, potentially impacting patient care and compliance.",
+          "tags": [
+            "pharmacy",
+            "mobile-app",
+            "compliance"
+          ],
+          "source_topic_id": "T-03",
+          "potential_constraint_conflicts": [],
+          "evidence": [
+            {
+              "topic_id": "T-03",
+              "theme": "pharmacy-refill-unification",
+              "raw_quote": "The single biggest complaint to the pharmacy help line is \"I refilled my prescription in the app but the pharmacy says it isn't ready and they have no record.\" It's because we have TWO refill flows: the in-app one, and the IVR phone line. They write to different systems and the systems don't reconcile in real time.",
+              "speaker": "Anika",
+              "sentiment": "request"
+            }
+          ],
+          "tasks": [
+            {
+              "title": "Conduct a spike to map existing mobile app and IVR refill workflows and identify data discrepancies.",
+              "type": "spike",
+              "id": "ST-03-TK-01"
+            },
+            {
+              "title": "Design and implement a unified backend service/API for prescription refill requests and status management.",
+              "type": "backend",
+              "id": "ST-03-TK-02"
+            },
+            {
+              "title": "Migrate mobile app refill submission and status retrieval to use the new unified pharmacy service.",
+              "type": "frontend",
+              "id": "ST-03-TK-03"
+            },
+            {
+              "title": "Update IVR system integration to submit refill requests and retrieve status from the new unified pharmacy service.",
+              "type": "backend",
+              "id": "ST-03-TK-04"
+            },
+            {
+              "title": "Develop a push notification service for prescription status updates, ensuring HIPAA compliance for content.",
+              "type": "backend",
+              "id": "ST-03-TK-05"
+            },
+            {
+              "title": "Implement mobile app UI to display real-time, unified prescription status updates.",
+              "type": "frontend",
+              "id": "ST-03-TK-06"
+            },
+            {
+              "title": "Develop end-to-end QA scenarios covering refill submission via both channels and notification delivery.",
+              "type": "qa",
+              "id": "ST-03-TK-07"
+            }
+          ]
+        },
+        {
+          "id": "ST-04",
+          "title": "Improve Loyalty Tier Transparency in Mobile App",
+          "description": "Enhance the mobile app to provide greater transparency regarding loyalty tier status, including clear rules for earning and losing tiers, and explicit communication about the timing of tier downgrades. This aims to reduce customer confusion and frustration.",
+          "user_story": "As a loyalty program member, I want to clearly understand how I earn and lose loyalty tier status and the timing of any downgrades within the mobile app, so that I am not surprised or frustrated by changes.",
+          "acceptance_criteria": [
+            "Given a loyalty program member views their tier status in the mobile app, when they navigate to tier rules, then clear and concise criteria for earning and maintaining each tier are displayed.",
+            "Given a loyalty program member is approaching a tier downgrade, when they view their status, then the app clearly communicates the impending downgrade and its effective date.",
+            "Given a loyalty program member views their current tier, when they view their progress, then the app shows their progress towards the next tier or maintaining their current tier.",
+            "Given a loyalty program member has been downgraded, when they view their status, then the app provides a clear explanation for the downgrade."
+          ],
+          "priority": "Medium",
+          "priority_rationale": "Customer confusion and frustration regarding loyalty tier changes negatively impact customer satisfaction, but do not block critical operations or revenue streams directly.",
+          "tags": [
+            "loyalty",
+            "mobile-app"
+          ],
+          "source_topic_id": "T-04",
+          "potential_constraint_conflicts": [],
+          "evidence": [
+            {
+              "topic_id": "T-04",
+              "theme": "loyalty-tier-clarity",
+              "raw_quote": "Customers don't understand how they earn or lose tier status. They get a \"you're Gold!\" email and then 2 months later \"you've been downgraded to Silver\" and they're upset. The downgrade timing isn't clear from any customer-facing surface.",
+              "speaker": "Priya",
+              "sentiment": "concern"
+            }
+          ],
+          "tasks": [
+            {
+              "title": "Develop or enhance backend API to expose loyalty tier rules, earning criteria, and maintenance requirements.",
+              "type": "backend",
+              "id": "ST-04-TK-01"
+            },
+            {
+              "title": "Develop or enhance backend API to provide current loyalty tier status, progress towards next tier, and impending downgrade information.",
+              "type": "backend",
+              "id": "ST-04-TK-02"
+            },
+            {
+              "title": "Implement mobile app UI to display detailed loyalty tier rules and criteria.",
+              "type": "frontend",
+              "id": "ST-04-TK-03"
+            },
+            {
+              "title": "Implement mobile app UI to show current tier status, progress, and visual indicators for tier changes.",
+              "type": "frontend",
+              "id": "ST-04-TK-04"
+            },
+            {
+              "title": "Implement mobile app UI to clearly communicate impending tier downgrades, including effective dates and reasons.",
+              "type": "frontend",
+              "id": "ST-04-TK-05"
+            },
+            {
+              "title": "Implement mobile app UI to provide clear explanations for past tier downgrades.",
+              "type": "frontend",
+              "id": "ST-04-TK-06"
+            },
+            {
+              "title": "Develop QA test cases for various loyalty member scenarios, including earning, maintaining, and losing tiers.",
+              "type": "qa",
+              "id": "ST-04-TK-07"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "id": "G-01",
+      "title": "Offline Transaction Reconciliation",
+      "description": "The story enables offline cash transactions but does not address the critical process of reconciling these transactions with central systems (e.g., inventory, sales, finance) once network connectivity is restored. This is essential for data integrity and accurate reporting.",
+      "related_ids": [
+        "ST-01"
+      ],
+      "evidence": "Implement an offline mode for Point-of-Sale (POS) systems to allow basic cash transactions during WAN outages."
+    },
+    {
+      "id": "G-02",
+      "title": "Logic for Suggesting Out-of-Stock Alternatives",
+      "description": "While the story mentions suggesting available alternatives for out-of-stock items, it doesn't explicitly cover the underlying logic, rules, or data sources required to generate these relevant suggestions. This is a distinct capability from merely displaying inventory status.",
+      "related_ids": [
+        "ST-02"
+      ],
+      "evidence": "For out-of-stock items, the system should accurately display 'in stock' badges and suggest available alternatives directly within the search results or product page."
+    },
+    {
+      "id": "G-03",
+      "title": "Unified Pharmacy Refill Data Management",
+      "description": "The story focuses on unifying refill processes and notifications, but it doesn't explicitly address the underlying data architecture, migration, or consolidation required to create a single, reconciled system for prescription refill records, ensuring HIPAA-compliant storage and access.",
+      "related_ids": [
+        "ST-03"
+      ],
+      "evidence": "Unify the prescription refill processes from the mobile app and IVR phone line into a single, reconciled system."
+    }
+  ],
+  "conflicts": [],
+  "duplicates": [],
+  "token_usage": {
+    "constraint_extractor": {
+      "input": 0,
+      "output": 0
+    },
+    "parser": {
+      "input": 0,
+      "output": 0
+    },
+    "story_writer": {
+      "input": 0,
+      "output": 0
+    },
+    "epic_decomposer": {
+      "input": 0,
+      "output": 0
+    },
+    "gap_detector": {
+      "input": 0,
+      "output": 0
+    },
+    "total": {
+      "input": 0,
+      "output": 0
+    }
+  },
+  "model": "gemini-2.5-flash",
+  "models": {
+    "parser": "gemini-2.5-flash",
+    "constraint": "gemini-2.5-flash",
+    "story_writer": "gemini-2.5-flash",
+    "epic_decomposer": "gemini-2.5-flash",
+    "gap_detector": "gemini-2.5-flash"
+  },
+  "guardrail_findings": [],
+  "audit_chain_fingerprint": "b9124983e5ee2f064840e49eb6a452e8f76bc62aeb8cd0e5a69697b75c54f878"
+}

@@ -185,7 +185,6 @@ def test_orchestrator_end_to_end_with_mocks():
         claude=fake_claude,
         jira=FakeJira(),
         confluence=FakeConfluence(),
-        github=FakeGithub(),
     )
 
     # Disable embedding-based duplicate detection — this test asserts on
@@ -242,7 +241,6 @@ def test_orchestrator_skips_agents_when_input_missing():
         claude=fake_claude,
         jira=FakeJira(),
         confluence=FakeConfluence(),
-        github=FakeGithub(),
     )
 
     result = orchestrator.run(

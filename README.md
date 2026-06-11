@@ -90,13 +90,13 @@ A single **Orchestrator** coordinates five specialized agents, each calling tool
                   ▲              ▲              ▲
                   │              │              │
               ┌───┴────┐    ┌───┴────┐    ┌───┴────┐
-              │ JIRA   │    │Confluence│   │ GitHub │
-              │ tool   │    │  tool    │   │  tool  │
-              └────────┘    └────────┘    └────────┘
-              (mocked)       (mocked)      (mocked)
+              │ JIRA   │    │Confluence│
+              │ tool   │    │  tool    │
+              └────────┘    └────────┘
+              (live/mocked) (live/mocked)
 ```
 
-See [architecture.md](architecture.md) for the detailed diagram + agent contracts.
+See [architecture.md](versions/v1_baseline/architecture.md) for the detailed diagram + agent contracts.
 
 ---
 
@@ -147,12 +147,7 @@ spending API credit.
 pytest tests/ -v
 ```
 
-**128 tests across 9 files**, all mocked end-to-end (zero API credit, ~1s):
-- `test_agents.py` — per-agent unit tests + `MemoryStore` / `AuditLog`
-- `test_orchestrator.py` — five-agent handoff + output formatter
-- `test_redactor.py`, `test_guardrails.py`, `test_compare_mode.py`
-- `test_jira_live.py` — live JQL **and Jira write-back** (`create_issue` / `publish_synthesis`)
-- `test_confluence_live.py`, `test_vision.py`, `test_evaluation_runner.py`
+Tests cover per-agent unit tests, orchestrator five-agent handoff, output formatter, guardrails, Jira write-back (`create_issue` / `publish_synthesis`), Confluence live integration, vision input, and the evaluation runner. All mocked end-to-end — zero API credit.
 
 ### Run the evaluation harness
 
@@ -196,13 +191,12 @@ under `evaluation/results/ab/`.
 - **PDF transcripts** — `python -m src.main --transcript meeting.pdf …` works out of the box; pypdf parses text-extractable PDFs (scanned/image PDFs would need OCR).
 - **Live Atlassian sources** — fill in the `JIRA_*` block in `.env` (one set of credentials covers both products). Then either:
   - **CLI:** `python src/main.py --transcript notes.txt --confluence-page-id 65830 --live-jira`
-  - **UI:** open the sidebar "Live Atlassian sources" expander, toggle Confluence (paste the page id) and/or Jira, click Run.
+  - **UI:** fill in the "Live Atlassian sources" section in the sidebar, toggle Confluence (paste the page id) and/or Jira, click Run. The Atlassian section is always visible — no feature flag required.
   - The Confluence path calls `GET /wiki/api/v2/pages/{id}` with storage-format → text. The Jira path calls `GET /rest/api/3/search/jql` paginated, project-scoped to `JIRA_PROJECT_KEY`, capped at 200 issues per run.
   - Both successes/failures are recorded in `audit_trail.md` as `live_confluence_fetch_ok` / `live_jira_fetch_ok` (or `_failed`) so each run's data provenance is traceable after the fact.
 - **Seed a Confluence space** — `python scripts/seed_confluence.py` reads `samples/architecture_constraints.md` and `samples/product_strategy.md`, converts markdown to Confluence storage format, and creates two pages in the first non-personal space. Use `--space SD` to target a specific space, `--dry-run` to preview the XHTML without calling the API.
 - **Persistent vector memory** — set `MEMORY_PERSISTENT=1` to cache embeddings under `.cache/memory/` between runs. Re-runs on the same backlog skip the embed step.
-- **Strict PII redaction** — pass `strict_redact=True` to `Orchestrator.run` (alongside `redact_pii=True`) to halt the run if any PII pattern slips past the redactor at a tool boundary. Audit-logged.
-- **Cost panel** — every UI run shows per-stage tokens, per-agent cost at the active stage's model rate, and a recent-cost-trend chart across the last 10 saved runs.
+- **Post-run token count** — the UI displays total tokens used per agent after each run. Run cost is stored in run history (recorded as 0.0).
 - **Story evidence** — each story carries the customer quote that motivated it (`story.evidence[0].raw_quote`), surfaced inline on the Epics tab. Evidence is attached deterministically by the system from the topic the story cites (`source_topic_id`), not produced by the model — so it can't be hallucinated.
 
 ---
@@ -215,7 +209,6 @@ backlog-synthesizer/
 ├── LICENSE
 ├── requirements.txt
 ├── .env.example
-├── architecture.md                  ← multi-agent architecture diagram
 ├── src/
 │   ├── main.py                      ← CLI entry point
 │   ├── orchestrator.py              ← multi-agent coordinator
@@ -232,9 +225,8 @@ backlog-synthesizer/
 │   ├── tools/
 │   │   ├── base.py
 │   │   ├── claude_tool.py           ← wrapped Claude API client
-│   │   ├── jira_tool.py             ← mocked JIRA API
-│   │   ├── confluence_tool.py       ← mocked Confluence API
-│   │   └── github_tool.py           ← mocked GitHub Issues API
+│   │   ├── jira_tool.py             ← JIRA API (live + mocked)
+│   │   └── confluence_tool.py       ← Confluence API (live + mocked)
 │   └── memory/
 │       ├── store.py                 ← shared memory (vector + KV)
 │       └── audit_log.py             ← structured trace events
@@ -251,7 +243,7 @@ backlog-synthesizer/
 │   ├── architecture_constraints.md  ← Confluence-style export
 │   ├── product_strategy.md          ← strategy document
 │   ├── jira_backlog.json            ← existing JIRA tickets (mocked)
-│   └── github_issues.json           ← existing GitHub issues (mocked)
+│   └── github_issues.json           ← existing GitHub issues (sample data)
 ├── evaluation/
 │   ├── golden_dataset/              ← 10 hand-curated input/expected pairs incl. negative / conflict-heavy / ambiguity / compliance cases
 │   ├── metrics.py                   ← completeness, tag accuracy, F1 for conflicts
@@ -281,9 +273,9 @@ The Claude API is called by each agent for its specific reasoning task. Outside 
 | **Constraint Extractor** | What architectural rules / integrations / limits apply | `claude_tool`, `confluence_tool` |
 | **Story Writer** | What user stories with AC fit the customer asks | `claude_tool` |
 | **Epic Decomposer** | How to group stories into epics + break them into tasks | `claude_tool` |
-| **Gap Detector** | Which new asks are duplicates, conflicts, or gaps | `claude_tool`, `jira_tool`, `github_tool` |
+| **Gap Detector** | Which new asks are duplicates, conflicts, or gaps | `claude_tool`, `jira_tool` |
 
-Embedding-based retrieval (from the simpler v1) lives in `src/memory/store.py` and is used by the Gap Detector to surface candidate backlog items before the LLM reranks.
+Embedding-based retrieval lives in `src/memory/store.py` and is used by the Gap Detector to surface candidate backlog items before the LLM reranks.
 
 ---
 

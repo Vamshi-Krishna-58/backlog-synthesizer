@@ -23,77 +23,63 @@ Free-tier convention:
 
 from __future__ import annotations
 
-# Per-million-token list prices (USD). input = prompt, output = completion.
+# Prices are USD per 1 million tokens: {"input": <price>, "output": <price>}
 MODEL_PRICES: dict[str, dict[str, float]] = {
-    # ---- Ollama (local — always $0.00) ----
-    # The "ollama" prefix catches any "ollama/<model>" id via longest-prefix
-    # match. Local generation costs nothing so we use 0.0.
-    "ollama":                {"input": 0.0, "output": 0.0},
-
-    # ---- Anthropic Claude ----
-    # Claude Sonnet 4 / 4.5 — workhorse model
-    "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
-    "claude-sonnet-4":   {"input": 3.0, "output": 15.0},
-    "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
-    "claude-3-7-sonnet": {"input": 3.0, "output": 15.0},
-    # Opus — premium
-    "claude-opus-4-5":   {"input": 15.0, "output": 75.0},
-    "claude-opus-4":     {"input": 15.0, "output": 75.0},
-    "claude-3-opus":     {"input": 15.0, "output": 75.0},
-    # Haiku — small / fast
-    "claude-haiku-4-5":  {"input": 1.0,  "output": 5.0},
-    "claude-3-5-haiku":  {"input": 0.80, "output": 4.0},
-    "claude-3-haiku":    {"input": 0.25, "output": 1.25},
-
-    # ---- Google Gemini (paid-tier list rates; free tier eligible) ----
-    # Longest-prefix wins, so the "lite" entry must be longer than the
-    # plain "gemini-2.5-flash" prefix — which it is.
-    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
-    "gemini-2.5-flash":      {"input": 0.30, "output": 2.50},
-    "gemini-2.5-pro":        {"input": 1.25, "output": 10.00},
-    # Older fallbacks in case the model id drifts
-    "gemini-2.0-flash":      {"input": 0.10, "output": 0.40},
-    "gemini-1.5-flash":      {"input": 0.075, "output": 0.30},
-    "gemini-1.5-pro":        {"input": 1.25, "output": 5.00},
+    "ollama":               {"input": 0.0,   "output": 0.0},
+    # Claude
+    "claude-sonnet-4-5":   {"input": 3.0,   "output": 15.0},
+    "claude-sonnet-4":     {"input": 3.0,   "output": 15.0},
+    "claude-3-5-sonnet":   {"input": 3.0,   "output": 15.0},
+    "claude-3-7-sonnet":   {"input": 3.0,   "output": 15.0},
+    "claude-opus-4-5":     {"input": 75.0,  "output": 75.0},
+    "claude-opus-4":       {"input": 75.0,  "output": 75.0},
+    "claude-3-opus":       {"input": 75.0,  "output": 75.0},
+    "claude-haiku-4-5":    {"input": 1.0,   "output": 5.0},
+    "claude-3-5-haiku":    {"input": 0.8,   "output": 4.0},
+    "claude-3-haiku":      {"input": 0.25,  "output": 1.25},
+    # Gemini
+    "gemini-2.5-flash-lite": {"input": 0.1,  "output": 0.4},
+    "gemini-2.5-flash":    {"input": 0.3,   "output": 2.5},
+    "gemini-2.5-pro":      {"input": 10.0,  "output": 10.0},
+    "gemini-2.0-flash":    {"input": 0.1,   "output": 0.4},
+    "gemini-1.5-flash":    {"input": 0.075, "output": 0.3},
+    "gemini-1.5-pro":      {"input": 2.5,   "output": 10.0},
 }
 
-
-# Free-tier eligible models — used by the UI to display a "(free tier)" tag
-# next to the price. The cost panel still shows the LIST rate computed from
-# MODEL_PRICES (see module docstring for why).
-FREE_TIER_MODELS: set[str] = {
-    "gemini-2.5-flash",
+FREE_TIER_MODELS: set[str] = frozenset({
+    "ollama",
     "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "ollama",   # all local Ollama models are free
-}
+})
 
 
 def is_free_tier_eligible(model: str) -> bool:
     """True when `model` is on a provider's free tier (longest-prefix match)."""
-    if not model:
-        return False
-    key = model.lower().strip()
-    for prefix in sorted(FREE_TIER_MODELS, key=len, reverse=True):
-        if key.startswith(prefix):
+    model_lower = model.lower()
+    for key in FREE_TIER_MODELS:
+        if model_lower.startswith(key):
             return True
     return False
 
 
 def _lookup(model: str) -> dict[str, float] | None:
     """Longest-prefix match against MODEL_PRICES, case-insensitive."""
-    if not model:
-        return None
-    key = model.lower().strip()
-    # Sort by descending length so e.g. "claude-3-5-sonnet" wins over
-    # "claude-3" if both were present.
-    for prefix in sorted(MODEL_PRICES.keys(), key=len, reverse=True):
-        if key.startswith(prefix):
-            return MODEL_PRICES[prefix]
-    return None
+    model_lower = model.lower()
+    best_key = None
+    best_len = -1
+    for key in MODEL_PRICES:
+        if model_lower.startswith(key) and len(key) > best_len:
+            best_key = key
+            best_len = len(key)
+    return MODEL_PRICES[best_key] if best_key is not None else None
 
 
-def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float | None:
+def estimate_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+) -> float | None:
     """Return the estimated USD cost for `input_tokens` + `output_tokens` on `model`.
 
     Returns None when the model isn't in the price table — the caller should
@@ -103,15 +89,16 @@ def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
     prices = _lookup(model)
     if prices is None:
         return None
-    return (input_tokens * prices["input"] + output_tokens * prices["output"]) / 1_000_000.0
+    return (
+        input_tokens  / 1_000_000 * prices["input"]
+        + output_tokens / 1_000_000 * prices["output"]
+    )
 
 
 def estimate_total_cost_usd(model: str, totals: dict[str, int]) -> float | None:
     """Convenience: `totals` like {"input": N, "output": N}."""
-    if not totals:
-        return None
     return estimate_cost_usd(
         model,
-        int(totals.get("input", 0) or 0),
-        int(totals.get("output", 0) or 0),
+        input_tokens=totals.get("input", 0),
+        output_tokens=totals.get("output", 0),
     )

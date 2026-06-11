@@ -9,7 +9,9 @@ Metrics implemented:
   - required_topics_present
   - forbidden_topics_absent
   - expected_duplicates_found
-  - expected_constraint_conflicts_found
+  - expected_constraint_conflicts_found  (recall — did we catch real ones?)
+  - conflict_detection_precision         (precision — were the flags trustworthy?)
+  - conflict_detection_f1                (F1 — harmonic mean of recall + precision)
 
 A separate LLM-as-judge evaluator (see `llm_as_judge.py`, skeleton only)
 handles qualitative aspects like "are the acceptance criteria genuinely
@@ -37,6 +39,8 @@ def all_metrics(synthesis: dict, expected: dict) -> list[MetricResult]:
         forbidden_topics_absent(synthesis, expected),
         expected_duplicates_found(synthesis, expected),
         expected_constraint_conflicts_found(synthesis, expected),
+        conflict_detection_precision(synthesis, expected),
+        conflict_detection_f1(synthesis, expected),
     ]
 
 
@@ -185,6 +189,116 @@ def expected_constraint_conflicts_found(synthesis: dict, expected: dict) -> Metr
     score = matched / len(expected_conflicts)
     observations.insert(0, f"{matched}/{len(expected_conflicts)} expected conflicts flagged")
     return MetricResult("expected_constraint_conflicts_found", score, observations)
+
+
+def conflict_detection_precision(synthesis: dict, expected: dict) -> MetricResult:
+    """Of every conflict the AI flagged, how many were actually expected?
+
+    Answers the "crying wolf" question: a low precision means the AI is
+    raising false alarms that waste the team's time.
+
+    Score = correctly_flagged / total_flagged_by_ai
+    If the AI flagged nothing, score = 1.0 (no false alarms, but recall
+    may be 0 — see conflict_detection_f1 for the combined view).
+    """
+    expected_conflicts = expected.get("expected_constraint_conflicts", [])
+    found_conflicts = synthesis.get("conflicts", [])
+
+    if not found_conflicts:
+        return MetricResult(
+            "conflict_detection_precision",
+            1.0,
+            ["AI flagged 0 conflicts — no false alarms (but recall may be 0)"],
+        )
+
+    correctly_flagged = 0
+    false_alarms = []
+
+    for fc in found_conflicts:
+        story_id = fc.get("story_id", "")
+        # A flagged conflict is "correct" if it matches at least one expected pattern
+        is_expected = any(
+            _story_has_keywords(
+                synthesis, story_id, [k.lower() for k in exp.get("story_keywords", [])]
+            )
+            for exp in expected_conflicts
+        )
+        if is_expected:
+            correctly_flagged += 1
+        else:
+            false_alarms.append(f"Unexpected conflict flagged for story `{story_id}`")
+
+    score = correctly_flagged / len(found_conflicts)
+    observations = [
+        f"{correctly_flagged}/{len(found_conflicts)} flagged conflicts matched expected patterns"
+    ] + false_alarms
+    return MetricResult("conflict_detection_precision", score, observations)
+
+
+def conflict_detection_f1(synthesis: dict, expected: dict) -> MetricResult:
+    """Harmonic mean of conflict recall and precision.
+
+    F1 = 2 * (precision * recall) / (precision + recall)
+
+    Catches both failure modes:
+      - Recall = 0 → missed real conflicts (dangerous)
+      - Precision = 0 → pure noise, no real conflicts found (wasteful)
+    Score = 0 if either is 0; score = 1 only when both are perfect.
+    """
+    expected_conflicts = expected.get("expected_constraint_conflicts", [])
+    found_conflicts = synthesis.get("conflicts", [])
+
+    if not expected_conflicts and not found_conflicts:
+        return MetricResult("conflict_detection_f1", 1.0, ["No conflicts expected or flagged"])
+
+    # Recall: expected conflicts that were caught
+    if expected_conflicts:
+        recall_matched = sum(
+            1
+            for exp in expected_conflicts
+            if any(
+                _story_has_keywords(
+                    synthesis,
+                    fc.get("story_id", ""),
+                    [k.lower() for k in exp.get("story_keywords", [])],
+                )
+                for fc in found_conflicts
+            )
+        )
+        recall = recall_matched / len(expected_conflicts)
+    else:
+        recall = 1.0
+        recall_matched = 0
+
+    # Precision: flagged conflicts that were actually expected
+    if found_conflicts:
+        precision_matched = sum(
+            1
+            for fc in found_conflicts
+            if any(
+                _story_has_keywords(
+                    synthesis,
+                    fc.get("story_id", ""),
+                    [k.lower() for k in exp.get("story_keywords", [])],
+                )
+                for exp in expected_conflicts
+            )
+        )
+        precision = precision_matched / len(found_conflicts)
+    else:
+        precision = 1.0
+        precision_matched = 0
+
+    if precision + recall == 0:
+        f1 = 0.0
+    else:
+        f1 = 2 * precision * recall / (precision + recall)
+
+    observations = [
+        f"F1 {f1:.2f}  (recall {recall:.2f} = {recall_matched}/{len(expected_conflicts) or 0}"
+        f",  precision {precision:.2f} = {precision_matched}/{len(found_conflicts) or 0})"
+    ]
+    return MetricResult("conflict_detection_f1", f1, observations)
 
 
 # ----------------------------------------------------- helpers

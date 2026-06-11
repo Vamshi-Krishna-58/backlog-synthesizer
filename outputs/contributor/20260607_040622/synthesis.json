@@ -1,0 +1,291 @@
+{
+  "summary": "The meeting discussed various customer-facing problems and needs for Q3, including POS outages during peak hours, mobile app search issues with out-of-stock items, pharmacy refill confusion, loyalty tier uncertainty, and store-associate handheld scanner limitations.",
+  "topics": [
+    {
+      "id": "T-01",
+      "theme": "pos-outage-during-peak-hours",
+      "summary": "The POS system experiences frequent outages during peak hours, causing cashiers to lose internet access and resulting in lost revenue for the company.",
+      "raw_quote": "when the WAN drops, our POS goes fully offline \u2014 can't even process a cash sale because it can't validate the SKU pricing locally.",
+      "speaker": "Hiroshi",
+      "sentiment": "concern"
+    },
+    {
+      "id": "T-02",
+      "theme": "mobile-search-out-of-stock-items",
+      "summary": "The mobile app search feature often returns out-of-stock items, leading to a negative customer experience and NPS scores.",
+      "raw_quote": "NPS for customers who hit this is -30. Customers who don't hit it are +18.",
+      "speaker": "Marcus",
+      "sentiment": "concern"
+    },
+    {
+      "id": "T-03",
+      "theme": "pharmacy-refill-confusion",
+      "summary": "The pharmacy refill process is confusing due to the use of two separate systems, leading to issues with medication availability and customer satisfaction.",
+      "raw_quote": "It's because we have TWO refill flows: the in-app one, and the IVR phone line. They write to different systems and the systems don't reconcile in real time.",
+      "speaker": "Anika",
+      "sentiment": "concern"
+    },
+    {
+      "id": "T-04",
+      "theme": "loyalty-tier-confusion",
+      "summary": "Customers are unsure about how they earn or lose loyalty tier status, leading to frustration and confusion.",
+      "raw_quote": "The downgrade timing isn't clear from any customer-facing surface.",
+      "speaker": "Priya",
+      "sentiment": "concern"
+    },
+    {
+      "id": "T-05",
+      "theme": "store-associate-handheld-scanner-limitations",
+      "summary": "The store-associate handheld scanners are outdated and lack modern features, causing issues with inventory management and customer satisfaction.",
+      "raw_quote": "The store-side handheld inventory scanners are running Android 7. They can't get security patches anymore.",
+      "speaker": "Hiroshi",
+      "sentiment": "observation"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "C-01",
+      "severity": "must",
+      "category": "performance | security",
+      "statement": "All payment authorization MUST go through the PaymentGateway service.",
+      "source_excerpt": "All payment authorization MUST go through the PaymentGateway service.",
+      "applies_to": [
+        "pos",
+        "mobile-app"
+      ]
+    },
+    {
+      "id": "C-02",
+      "severity": "must",
+      "category": "security | compliance",
+      "statement": "Any feature that surfaces a medication name (push notifications, emails, SMS, in-app text) requires explicit patient opt-in stored on the prescription record.",
+      "source_excerpt": "HIPAA. Any feature that surfaces a medication name (push notifications, emails, SMS, in-app text) requires: Explicit patient opt-in stored on the prescription record",
+      "applies_to": [
+        "ecommerce",
+        "*"
+      ]
+    },
+    {
+      "id": "C-03",
+      "severity": "forbidden",
+      "category": "performance | offline",
+      "statement": "Card sales when the WAN is down: FORBIDDEN.",
+      "source_excerpt": "Card sales when the WAN is down: FORBIDDEN.",
+      "applies_to": [
+        "pos"
+      ]
+    },
+    {
+      "id": "C-04",
+      "severity": "must",
+      "category": "integration | performance",
+      "statement": "Mobile app cart-load p95 must stay under 1.5 seconds on a 3G connection.",
+      "source_excerpt": "Mobile app cart-load p95 must stay under 1.5 seconds on a 3G connection.",
+      "applies_to": [
+        "mobile-app"
+      ]
+    },
+    {
+      "id": "C-05",
+      "severity": "forbidden",
+      "category": "integration | security",
+      "statement": "Direct calls to card processors are forbidden \u2014 this is a PCI scope requirement.",
+      "source_excerpt": "All payment authorization MUST go through the PaymentGateway service. Direct calls to card processors are forbidden \u2014 this is a PCI scope requirement.",
+      "applies_to": [
+        "pos"
+      ]
+    },
+    {
+      "id": "C-06",
+      "severity": "must",
+      "category": "security | compliance",
+      "statement": "All prescription-related operations MUST go through the Rx Hub service.",
+      "source_excerpt": "All prescription-related operations MUST go through the Rx Hub service.",
+      "applies_to": [
+        "pharmacy"
+      ]
+    },
+    {
+      "id": "C-07",
+      "severity": "forbidden",
+      "category": "integration | security",
+      "statement": "Federation with NSID is the only supported pattern for customer identity.",
+      "source_excerpt": "All customer identity must flow through NorthStar Identity (NSID). New auth flows MUST NOT introduce a separate customer credential store. Federation with NSID is the only supported pattern.",
+      "applies_to": [
+        "pos",
+        "*"
+      ]
+    }
+  ],
+  "epics": [
+    {
+      "id": "EP-01",
+      "title": "Inventory Management and POS System Enhancements",
+      "description": "Improving inventory accuracy and POS system reliability to enhance customer satisfaction and operational efficiency.",
+      "stories": [
+        {
+          "id": "ST-02",
+          "title": "Display accurate inventory status for searched items in mobile app",
+          "description": "...",
+          "user_story": "...",
+          "acceptance_criteria": [
+            "..."
+          ],
+          "priority": "...",
+          "priority_rationale": "...",
+          "tags": [
+            "..."
+          ],
+          "source_topic_id": "...",
+          "evidence": [
+            {
+              "topic_id": "T-02",
+              "theme": "...",
+              "raw_quote": "...",
+              "speaker": "...",
+              "sentiment": "..."
+            }
+          ],
+          "potential_constraint_conflicts": [
+            "..."
+          ],
+          "tasks": [
+            {
+              "title": "Implement mobile app search result validation for out-of-stock items",
+              "type": "frontend",
+              "id": "ST-02-TK-01"
+            },
+            {
+              "title": "Update inventory data schema to support accurate stock availability tracking",
+              "type": "data",
+              "id": "ST-02-TK-02"
+            }
+          ]
+        },
+        {
+          "id": "ST-05",
+          "title": "Upgrade store-associate handheld inventory scanners to a supported OS",
+          "description": "...",
+          "user_story": "...",
+          "acceptance_criteria": [
+            "..."
+          ],
+          "priority": "...",
+          "priority_rationale": "...",
+          "tags": [
+            "..."
+          ],
+          "source_topic_id": "...",
+          "evidence": [
+            {
+              "topic_id": "T-05",
+              "theme": "...",
+              "raw_quote": "...",
+              "speaker": "...",
+              "sentiment": "..."
+            }
+          ],
+          "potential_constraint_conflicts": [
+            "..."
+          ],
+          "tasks": [
+            {
+              "title": "Upgrade handheld inventory scanners to Android 12 or newer",
+              "type": "infra",
+              "id": "ST-05-TK-01"
+            },
+            {
+              "title": "Implement security patching for upgraded handheld devices",
+              "type": "infra",
+              "id": "ST-05-TK-02"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "gaps": [],
+  "conflicts": [],
+  "duplicates": [],
+  "token_usage": {
+    "parser": {
+      "input": 2386,
+      "output": 564
+    },
+    "constraint_extractor": {
+      "input": 2277,
+      "output": 633
+    },
+    "story_writer": {
+      "input": 3759,
+      "output": 1723
+    },
+    "epic_decomposer": {
+      "input": 3514,
+      "output": 463
+    },
+    "total": {
+      "input": 11936,
+      "output": 3383
+    }
+  },
+  "model": "mixed (gemini-2.5-flash, ollama/llama3.2:3b)",
+  "models": {
+    "parser": "ollama/llama3.2:3b",
+    "constraint": "ollama/llama3.2:3b",
+    "story_writer": "gemini-2.5-flash",
+    "epic_decomposer": "ollama/llama3.2:3b",
+    "gap_detector": "gemini-2.5-flash"
+  },
+  "guardrail_findings": [
+    {
+      "code": "ac_count_too_low",
+      "severity": "warn",
+      "message": "Only 1 acceptance criterion \u2014 prompt asks for 2-5.",
+      "story_id": "ST-02"
+    },
+    {
+      "code": "ac_count_too_low",
+      "severity": "warn",
+      "message": "Only 1 acceptance criterion \u2014 prompt asks for 2-5.",
+      "story_id": "ST-05"
+    },
+    {
+      "code": "ac_missing_gwt",
+      "severity": "warn",
+      "message": "AC #1 doesn't use Given/When/Then \u2014 may not be testable as written.",
+      "story_id": "ST-02"
+    },
+    {
+      "code": "ac_missing_gwt",
+      "severity": "warn",
+      "message": "AC #1 doesn't use Given/When/Then \u2014 may not be testable as written.",
+      "story_id": "ST-05"
+    },
+    {
+      "code": "non_canonical_tag",
+      "severity": "info",
+      "message": "Tags outside the canonical set: ['...']. Either add them to the vocabulary or normalise.",
+      "story_id": "ST-02"
+    },
+    {
+      "code": "non_canonical_tag",
+      "severity": "info",
+      "message": "Tags outside the canonical set: ['...']. Either add them to the vocabulary or normalise.",
+      "story_id": "ST-05"
+    },
+    {
+      "code": "dangling_topic_ref",
+      "severity": "warn",
+      "message": "source_topic_id='...' doesn't match any parsed topic. The story writer agent attempted auto-repair; if this persists, try a stronger model (Balanced or Premium preset).",
+      "story_id": "ST-02"
+    },
+    {
+      "code": "dangling_topic_ref",
+      "severity": "warn",
+      "message": "source_topic_id='...' doesn't match any parsed topic. The story writer agent attempted auto-repair; if this persists, try a stronger model (Balanced or Premium preset).",
+      "story_id": "ST-05"
+    }
+  ],
+  "audit_chain_fingerprint": "e86be0066e96c26dc7ab9a425294ca81d96ed89fac4775cf5989a89768769843"
+}

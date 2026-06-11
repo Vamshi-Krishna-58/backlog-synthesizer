@@ -23,6 +23,12 @@ class Tool:
 
     name: str = "tool"
 
+    def __reduce__(self) -> tuple:
+        # Tool objects are stored in LangGraph state (_jira, _confluence).
+        # MemorySaver tries to serialize every state field; returning a fresh
+        # instance prevents a msgpack TypeError without disrupting the run.
+        return (self.__class__.__new__, (self.__class__,))
+
 
 # ----------------------------------------------------- vision attachments
 

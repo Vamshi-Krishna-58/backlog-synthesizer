@@ -1,192 +1,299 @@
-# Architecture
+# Backlog Synthesizer — Architecture Diagram
 
-Enterprise production-grade multi-agent AI system for sprint backlog synthesis.  
-**Accenture · AI-First Agentic Solutions**
-
----
-
-## System Architecture
+> Render this file in VS Code with the **Markdown Preview Mermaid Support** extension,
+> or open it on GitHub / any Mermaid-aware viewer.
 
 ```mermaid
 flowchart TB
-    %% ── User & Identity ──────────────────────────────────────────
-    Browser((Browser)):::user
-    EntraID["Microsoft Entra ID\nnorthstarretailcorp.onmicrosoft.com\nadmin / contributor / viewer"]:::auth
+    %% ─────────────────────────────────────────────────────────────────
+    %% STYLE DEFINITIONS
+    %% ─────────────────────────────────────────────────────────────────
+    classDef ui        fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:6
+    classDef auth      fill:#7B68EE,stroke:#5A4DB0,color:#fff,rx:6
+    classDef input     fill:#5BAD6F,stroke:#3D8050,color:#fff,rx:6
+    classDef orch      fill:#E8A838,stroke:#B07820,color:#fff,rx:6
+    classDef node_box  fill:#F5C842,stroke:#B07820,color:#333,rx:4
+    classDef agent     fill:#E06C3B,stroke:#A04820,color:#fff,rx:6
+    classDef tool      fill:#D95F5F,stroke:#A03030,color:#fff,rx:6
+    classDef provider  fill:#888,stroke:#555,color:#fff,rx:6
+    classDef memory    fill:#4BACC6,stroke:#2980B9,color:#fff,rx:6
+    classDef integ     fill:#70AD47,stroke:#3D8050,color:#fff,rx:6
+    classDef output    fill:#5B9BD5,stroke:#2E75B6,color:#fff,rx:6
+    classDef eval      fill:#9B59B6,stroke:#6C3483,color:#fff,rx:6
+    classDef obs       fill:#1ABC9C,stroke:#148F77,color:#fff,rx:6
+    classDef preset    fill:#F39C12,stroke:#B7770D,color:#fff,rx:4
 
-    Browser <-->|OAuth2 / OIDC| EntraID
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 0 — USER ENTRY POINTS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph ENTRY["  User Entry Points  "]
+        direction LR
+        WEB["🖥️ Streamlit Web UI\napp.py\nport 8501"]:::ui
+        CLI_["⌨️ CLI\nsrc/main.py"]:::ui
+    end
 
-    %% ── Application ──────────────────────────────────────────────
-    Browser -->|HTTPS| App
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 1 — AUTHENTICATION
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph AUTH["  Authentication Layer  "]
+        direction LR
+        ENTRA["🔐 Microsoft Entra ID\nSSO / OAuth2\nentra_auth.py"]:::auth
+        LOCAL_AUTH["🔑 Local Auth\nstreamlit-authenticator\nconfig/auth.yaml"]:::auth
+    end
 
-    subgraph App["Application Layer — Streamlit"]
-        UI["app.py\nRole-gated UI · Feature flags\nRate limiting · PII redaction\nHuman-in-the-loop Jira gate\nExpandable profile panel"]:::app
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 2 — INPUTS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph INPUTS["  Input Sources  "]
+        direction LR
+        TRANSCRIPT["📄 Transcripts\n.txt / .md / .pdf"]:::input
+        WIKI["📋 Architecture Wiki\n.md constraints"]:::input
+        BACKLOG["🎫 Existing Backlog\nJIRA / GitHub JSON"]:::input
+        IMAGES["🖼️ Visual Attachments\n.png / .jpg whiteboard"]:::input
+    end
 
-        subgraph Orch["Orchestrator (orchestrator.py)"]
-            P["Parser\nAgent"]:::agent
-            CE["Constraint\nExtractor"]:::agent
-            SW["Story\nWriter"]:::agent
-            ED["Epic\nDecomposer"]:::agent
-            GD["Gap\nDetector"]:::agent
-            P --> CE --> SW --> ED --> GD
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 3 — ORCHESTRATION (LangGraph)
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph ORCH["  Orchestration Layer — LangGraph StateGraph (pipeline.py)  "]
+        direction TB
+        ORCH_WRAP["📦 Orchestrator\norchestrator.py\nbackward-compat wrapper"]:::orch
+        PIPELINE["⚙️ build_pipeline()\nStateGraph compile\n+ MemorySaver"]:::orch
+        STATE["📐 PipelineState TypedDict\nmemory/state.py\n24 typed fields"]:::orch
+
+        subgraph NODES["  LangGraph Nodes — Fixed Linear Sequence  "]
+            direction LR
+            N0["1️⃣\ninitialize\n(live fetch +\naudit setup)"]:::node_box
+            N1["2️⃣\nparse\n(topics from\ntranscript)"]:::node_box
+            N2["3️⃣\nextract_\nconstraints"]:::node_box
+            N3["4️⃣\nwrite_\nstories"]:::node_box
+            N4["5️⃣\ndecompose_\nepics"]:::node_box
+            N5["6️⃣\ndetect_\ngaps"]:::node_box
+            N6["7️⃣\nfinalize\n(guardrails +\ntoken tally)"]:::node_box
+            N0 --> N1 --> N2 --> N3 --> N4 --> N5 --> N6
         end
-
-        Mem["MemoryStore\nKV + Vector\nChromaDB"]:::store
-        Audit["AuditLog\nSHA-256 hash chain\nSQLite · 26+ events/run"]:::store
-
-        UI --> Orch
-        P & CE & SW & ED & GD <--> Mem
-        P & CE & SW & ED & GD --> Audit
     end
 
-    %% ── LLM Providers ─────────────────────────────────────────────
-    subgraph LLMs["LLM Providers"]
-        Claude["Anthropic Claude\nSonnet 4.5\n+ cache_control"]:::llm
-        Gemini["Google Gemini\n2.5 Flash / Pro\n+ JSON mode"]:::llm
-        Ollama["Ollama Local\nllama3.2:3b\n+ format:json"]:::llm
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 4 — AGENTS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph AGENTS["  Agent Layer (src/agents/)  "]
+        direction LR
+        A1["🔍 Parser Agent\nExtract topics\n+ raw quotes\n+ summary"]:::agent
+        A2["⚖️ Constraint Agent\nExtract rules\nplatform limits\ncompliance"]:::agent
+        A3["✍️ Story Writer Agent\nDraft user stories\nAC + priority\nrepair + evidence"]:::agent
+        A4["🏗️ Epic Decomposer\nGroup stories\ninto epics\n+ tasks"]:::agent
+        A5["🔎 Gap Detector\nDuplicates\nConflicts\nCoverage gaps"]:::agent
     end
 
-    SW & GD -.->|reasoning| Claude
-    P & CE & ED -.->|extraction| Gemini
-    P & CE & ED -.->|local free| Ollama
-
-    %% ── MCP Layer ─────────────────────────────────────────────────
-    subgraph MCP["MCP Integration Layer"]
-        AtlMCP["mcp-atlassian\nMCPJiraTool\nMCPConfluenceTool"]:::mcp
-        GHubMCP["server-github\nMCPGithubTool\n20 issues live"]:::mcp
-        MCPSvr["mcp_server.py\nsynthesize_backlog\npreview_prompts\nget_run_history\npush_to_jira"]:::mcp
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 5 — LLM TOOLS (LangChain-backed)
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph TOOLS["  LLM Tool Layer — LangChain Providers  "]
+        direction LR
+        CT["🟣 ClaudeTool\nlangchain-anthropic\nPrompt caching\nVision support"]:::tool
+        GT["🔵 GeminiTool\nlangchain-google-genai\nJSON mode"]:::tool
+        OT["🟢 OllamaTool\nlangchain-ollama\nLocal / offline\nformat=json"]:::tool
+        ET["📊 EmbeddingTool\nsentence-transformers\nall-MiniLM-L6-v2\nlocal, no LLM cost"]:::tool
     end
 
-    GD -.->|jira_search| AtlMCP
-    CE -.->|confluence_get_page| AtlMCP
-    GD -.->|list_issues| GHubMCP
-    ExtAgent["Claude Desktop\nor other agents"]:::user -.->|tool calls| MCPSvr
-    MCPSvr -.->|runs pipeline| Orch
-
-    %% ── External Services ─────────────────────────────────────────
-    subgraph External["External Services"]
-        Jira["Jira Cloud\nNS project\n127 tickets live\ntwo-way sync"]:::ext
-        Confluence["Confluence Cloud\nArchitecture wiki"]:::ext
-        GitHub["GitHub\nnorthstar-retail-backlog\n20 seeded issues"]:::ext
-        Grafana["Grafana Cloud\nTempo — traces\nMimir — metrics\nAlerting rules"]:::obs
+    %% ─────────────────────────────────────────────────────────────────
+    %% MODEL PRESETS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph PRESETS["  Model Presets (app.py)  "]
+        direction LR
+        P_LOCAL["🏠 Local\nAll Ollama\n~$0/run"]:::preset
+        P_FREE["🆓 Free\nAll Gemini Flash\n~$0.01/run"]:::preset
+        P_BAL["⚖️ Balanced\nGemini+Claude\n~$0.20/run"]:::preset
+        P_PREM["⭐ Premium\nAll Claude Sonnet\n~$0.80/run"]:::preset
     end
 
-    AtlMCP <-->|REST| Jira
-    AtlMCP <-->|REST| Confluence
-    GHubMCP <-->|REST| GitHub
-    UI -->|Push synthesis| Jira
-    UI -->|Sync status| Jira
-
-    %% ── Observability ─────────────────────────────────────────────
-    OTel["OpenTelemetry\npipeline.run\nstage.* spans\nllm.call spans\ntool.* spans\nguardrail.* spans"]:::obs
-    App --> OTel
-    OTel -->|OTLP / HTTP| Grafana
-
-    %% ── Deployment ────────────────────────────────────────────────
-    subgraph Deploy["Deployment (Azure)"]
-        GHA["GitHub Actions\nCI: 210 tests + lint\nCD: build→push→deploy"]:::deploy
-        ACR["Azure Container\nRegistry"]:::deploy
-        ACA["Azure Container Apps\npython:3.11-slim\nscale-to-zero"]:::deploy
-        KV["Azure Key Vault\nAnthropicKey\nJiraToken\nGoogleKey"]:::deploy
-        AF["Azure Files\nlogs/ outputs/\nper-user scoped"]:::deploy
-        TF["Terraform IaC\nmain.tf · variables.tf\noutputs.tf"]:::deploy
+    %% ─────────────────────────────────────────────────────────────────
+    %% LLM PROVIDERS (external)
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph PROVIDERS["  External LLM Providers  "]
+        direction LR
+        CLAUDE_API["☁️ Anthropic\nclaude-sonnet-4-5\nclaude-haiku-4-5"]:::provider
+        GEMINI_API["☁️ Google AI\ngemini-2.5-flash\ngemini-2.5-pro"]:::provider
+        OLLAMA_API["💻 Ollama (local)\nllama3.2:3b\nmistral / phi3"]:::provider
     end
 
-    GHA -->|push image| ACR
-    GHA -->|deploy| ACA
-    ACR --> ACA
-    KV --> ACA
-    AF --> ACA
-    TF -.->|provisions| ACR & ACA & KV & AF
+    %% ─────────────────────────────────────────────────────────────────
+    %% MEMORY & STATE LAYER
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph MEMORY["  Memory & State Layer  "]
+        direction LR
+        STORE["🗄️ MemoryStore\nmemory/store.py\nKV handoff +\nvector search\nChromaDB / NPZ"]:::memory
+        AUDIT_LOG["📜 AuditLog\nmemory/audit_log.py\nSQLite + SHA-256\nhash chain\ntamper-evident"]:::memory
+        LANGGRAPH_STATE["🔗 LangGraph State\nMemorySaver\nin-process\nper thread_id"]:::memory
+    end
 
-    App -.- ACA
+    %% ─────────────────────────────────────────────────────────────────
+    %% ENTERPRISE INTEGRATIONS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph INTEGRATIONS["  Enterprise Integrations  "]
+        direction LR
+        JIRA_T["🎫 JiraTool\nREST API\nLive read + publish\nMock fallback"]:::integ
+        CONF_T["📖 ConfluenceTool\nREST API\nFetch wiki pages\nMock fallback"]:::integ
+        MCP_T["🔗 MCP Atlassian\nmcp-atlassian server\nModel Context Protocol\nPython 3.10+"]:::integ
+    end
 
-    %% ── Styles ────────────────────────────────────────────────────
-    classDef user     fill:#1e293b,stroke:#94a3b8,color:#e2e8f0
-    classDef auth     fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff
-    classDef app      fill:#0f172a,stroke:#3b82f6,color:#bfdbfe
-    classDef agent    fill:#14532d,stroke:#4ade80,color:#dcfce7
-    classDef llm      fill:#4c1d95,stroke:#a78bfa,color:#ede9fe
-    classDef mcp      fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
-    classDef store    fill:#1c1917,stroke:#d97706,color:#fef3c7
-    classDef ext      fill:#1a1a2e,stroke:#64748b,color:#cbd5e1
-    classDef obs      fill:#0d3349,stroke:#22d3ee,color:#cffafe
-    classDef deploy   fill:#1e3a5f,stroke:#3b82f6,color:#dbeafe
+    %% ─────────────────────────────────────────────────────────────────
+    %% EXTERNAL SYSTEMS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph EXTERNAL["  External Systems  "]
+        direction LR
+        JIRA_EXT["Jira Cloud\natlassian.net"]:::provider
+        CONF_EXT["Confluence Cloud\natlassian.net"]:::provider
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% OUTPUTS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph OUTPUTS["  Synthesis Outputs  "]
+        direction LR
+        JSON_OUT["📦 synthesis.json\nEpics / Stories / Tasks\nGaps / Conflicts\nDuplicates"]:::output
+        MD_OUT["📝 synthesis.md\nHuman-readable\nMarkdown report"]:::output
+        AUDIT_OUT["🔒 audit_trail.md\nFull reasoning chain\ncompliance record"]:::output
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% OBSERVABILITY
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph OBS["  Observability  "]
+        direction LR
+        OTEL["📡 OpenTelemetry\nPer-stage spans\nOTEL_ENABLED=1\nOTLP export"]:::obs
+        LOGGER["📋 Structured Logger\nlogger_setup.py\nRich console output"]:::obs
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% EVALUATION HARNESS
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph EVAL["  Evaluation Harness  "]
+        direction LR
+        GOLDEN["🏆 10 Golden Cases\nevaluation/golden_dataset/\nnegative / conflict /\ncompliance cases"]:::eval
+        METRICS["📏 Deterministic Metrics\nevaluation/metrics.py\nstory count / AC / F1"]:::eval
+        JUDGE["⚖️ LLM-as-Judge\nevaluation/llm_as_judge.py\n5 quality dimensions"]:::eval
+        DASH["📈 Regression Dashboard\nevaluation/dashboard.py\ndrop ≥0.10 → CI fail"]:::eval
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% DATA FLOW CONNECTIONS
+    %% ─────────────────────────────────────────────────────────────────
+
+    %% Entry → Auth
+    WEB --> ENTRA
+    WEB --> LOCAL_AUTH
+
+    %% Entry → Orchestration
+    WEB -->|"models, inputs,\noptions"| ORCH_WRAP
+    CLI_ -->|"--transcript\n--wiki\n--backlog"| ORCH_WRAP
+
+    %% Inputs → Orchestration (via input_loader.py)
+    TRANSCRIPT -->|"input_loader.py"| ORCH_WRAP
+    WIKI -->|"input_loader.py"| ORCH_WRAP
+    BACKLOG -->|"input_loader.py"| ORCH_WRAP
+    IMAGES -->|"input_loader.py"| ORCH_WRAP
+
+    %% Orchestration internals
+    ORCH_WRAP -->|"build_pipeline()\n.invoke(state)"| PIPELINE
+    PIPELINE --> STATE
+    PIPELINE --> NODES
+
+    %% Presets → Orchestrator
+    PRESETS -->|"resolved_models\ndict"| ORCH_WRAP
+
+    %% Nodes → Agents (each node instantiates its agent)
+    N1 -->|"ParserAgent"| A1
+    N2 -->|"ConstraintAgent"| A2
+    N3 -->|"StoryWriterAgent"| A3
+    N4 -->|"EpicDecomposerAgent"| A4
+    N5 -->|"GapDetectorAgent"| A5
+
+    %% Agents → LLM Tools (per-stage model selection)
+    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| CT
+    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| GT
+    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| OT
+    A5 -->|"find_duplicates()"| ET
+
+    %% LLM Tools → Providers
+    CT -->|"langchain invoke\nmax_retries=3"| CLAUDE_API
+    GT -->|"langchain invoke\nmax_retries=3"| GEMINI_API
+    OT -->|"langchain invoke\nformat=json"| OLLAMA_API
+
+    %% Agents ↔ Memory (adapter pattern)
+    A1 & A2 & A3 & A4 & A5 -->|"memory.put(key, val)"| STORE
+    STORE -->|"memory.get(key)"| A1 & A2 & A3 & A4 & A5
+    STORE --> LANGGRAPH_STATE
+
+    %% Agents → Audit
+    A1 & A2 & A3 & A4 & A5 -->|"audit.record()\naudit.record_tool_call()"| AUDIT_LOG
+
+    %% Integrations
+    N0 -->|"live_confluence_page_id"| CONF_T
+    N0 -->|"live_jira=True"| JIRA_T
+    A5 -->|"jira.list_all()"| JIRA_T
+    JIRA_T --> MCP_T
+    CONF_T --> MCP_T
+    JIRA_T -->|"REST API"| JIRA_EXT
+    CONF_T -->|"REST API"| CONF_EXT
+    MCP_T -->|"MCP"| JIRA_EXT
+    MCP_T -->|"MCP"| CONF_EXT
+
+    %% Node 6 (finalize) → guardrails → outputs
+    N6 -->|"guardrails.py\nvalidation"| JSON_OUT
+    N6 --> MD_OUT
+    AUDIT_LOG -->|"render_markdown()"| AUDIT_OUT
+
+    %% Observability connections
+    A1 & A2 & A3 & A4 & A5 -->|"child_span()"| OTEL
+    CT & GT & OT -->|"llm.call span"| OTEL
+    ORCH_WRAP --> LOGGER
+
+    %% Evaluation
+    JSON_OUT -->|"compare vs expected"| GOLDEN
+    GOLDEN --> METRICS & JUDGE
+    METRICS & JUDGE --> DASH
 ```
 
 ---
 
-## Agent Pipeline Detail
+## Layer Reference
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant O as Orchestrator
-    participant P as Parser
-    participant CE as Constraint Extractor
-    participant SW as Story Writer
-    participant ED as Epic Decomposer
-    participant GD as Gap Detector
-    participant J as Jira (MCP)
-    participant GH as GitHub (MCP)
+| Layer | Files | Responsibility |
+|---|---|---|
+| **User Interface** | `app.py`, `src/main.py` | Streamlit UI + CLI entry points |
+| **Authentication** | `src/entra_auth.py`, `config/auth.yaml` | Entra ID SSO + local username/password |
+| **Orchestration** | `src/orchestrator.py`, `src/pipeline.py` | LangGraph StateGraph, backward-compat wrapper |
+| **Agents** | `src/agents/*.py` (5 files) | Specialized reasoning per stage |
+| **LLM Tools** | `src/tools/claude_tool.py`, `gemini_tool.py`, `ollama_tool.py` | LangChain-backed provider wrappers |
+| **Memory** | `src/memory/store.py`, `audit_log.py`, `state.py` | KV handoff, tamper-evident audit, LangGraph state |
+| **Integrations** | `src/tools/jira_tool.py`, `confluence_tool.py`, `mcp_atlassian_tool.py` | Atlassian REST + MCP |
+| **Evaluation** | `evaluation/*.py` + `golden_dataset/` | Regression testing + LLM-as-judge |
+| **Observability** | `src/logger_setup.py`, OpenTelemetry hooks | Structured logs + distributed tracing |
 
-    U->>O: transcript + wiki + backlog
-    Note over O: PII redaction (email→[EMAIL_1] etc.)
-    O->>P: transcript text
-    P->>P: Gemini Flash call → topics
-    P-->>O: [{id:T-01, theme, quote, speaker}]
+## Data Flow Summary
 
-    O->>CE: wiki text + Confluence page (MCP)
-    CE->>CE: Gemini Flash call → constraints
-    CE-->>O: [{id:C-01, severity:must, statement}]
-
-    O->>SW: topics + constraints
-    SW->>SW: Claude Sonnet → stories + AC
-    SW->>SW: auto-repair bad source_topic_ids
-    SW-->>O: [{id:ST-01, title, user_story, AC[]}]
-
-    O->>ED: stories
-    ED->>ED: Gemini Flash → epics + tasks
-    ED-->>O: [{epic, stories:[{tasks:[]}]}]
-
-    O->>GD: stories + tickets
-    GD->>J: jira_search (MCP) → 50 tickets
-    GD->>GH: list_issues (MCP) → 20 issues
-    GD->>GD: sentence-transformers → duplicates
-    GD->>GD: Claude Sonnet → conflicts + gaps
-    GD-->>O: {duplicates, conflicts, gaps}
-
-    Note over O: 6 guardrail checks (AC, grounding, tags...)
-    Note over O: PII un-redact output only
-    Note over O: Audit chain fingerprint (SHA-256)
-    O-->>U: synthesis result
-
-    U->>J: [human approves] Push to Jira
-    J-->>U: Epic→Story→Sub-task created
-    U->>J: Sync status from Jira
-    J-->>U: {status, assignee, priority}
 ```
-
----
-
-## Security & Data Flow
-
-```mermaid
-flowchart LR
-    T["Raw transcript\n(may contain PII)"]
-    R["Redactor\nemail→[EMAIL_1]\nphone→[PHONE_1]\nSSN→[SSN_1]\ncard→[CARD_1]\nname→[NAME_1]"]
-    LLM["LLM APIs\nNever sees raw PII\nOnly [EMAIL_1] tokens"]
-    A["Audit Log\nSHA-256 hash chain\nRedacted form kept\nTamper-evident"]
-    U["User output\nPII restored\n[EMAIL_1]→original"]
-    J["Jira\nHuman approval\nrequired before write"]
-
-    T --> R
-    R -->|redacted text| LLM
-    R -->|redacted excerpts| A
-    LLM -->|synthesis| U
-    U -->|un-redacted| U
-    U -.->|human approves| J
-
-    style R fill:#7f1d1d,color:#fecaca
-    style A fill:#1c1917,color:#fef3c7
-    style J fill:#1e3a5f,color:#dbeafe
+Transcript + Wiki + Backlog + Images
+         │
+    input_loader.py
+         │
+    Orchestrator.run()
+         │
+    LangGraph pipeline.invoke()
+         │
+    ┌────────────────────────────────────────────────────────┐
+    │  initialize → parse → constraints → stories →          │
+    │  epics → gap_detect → finalize                         │
+    │                                                        │
+    │  Each node: _hydrate_memory(state) → AgentX.run()      │
+    │             → _extract_memory_updates(mem) → state     │
+    └────────────────────────────────────────────────────────┘
+         │
+    guardrails.py (post-synthesis validation)
+         │
+    output_formatter.py
+         │
+    synthesis.json + synthesis.md + audit_trail.md
 ```

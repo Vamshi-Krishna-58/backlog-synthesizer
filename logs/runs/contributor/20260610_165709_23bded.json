@@ -1,0 +1,48 @@
+{
+  "run_id": "20260610_165709_b59514",
+  "timestamp": "20260610_165709",
+  "user_id": "contributor",
+  "source_label": "meeting_notes.txt",
+  "elapsed_seconds": 268.81459666599994,
+  "epic_count": 1,
+  "story_count": 3,
+  "dup_count": 0,
+  "gap_count": 0,
+  "conflict_count": 0,
+  "model": "mixed (gemini-2.5-flash, ollama/llama3.2:3b)",
+  "models": {
+    "parser": "ollama/llama3.2:3b",
+    "constraint": "ollama/llama3.2:3b",
+    "story_writer": "gemini-2.5-flash",
+    "epic_decomposer": "ollama/llama3.2:3b",
+    "gap_detector": "gemini-2.5-flash"
+  },
+  "token_usage": {
+    "parser": {
+      "input": 2386,
+      "output": 564
+    },
+    "constraint_extractor": {
+      "input": 2277,
+      "output": 633
+    },
+    "story_writer": {
+      "input": 3759,
+      "output": 1864
+    },
+    "epic_decomposer": {
+      "input": 3669,
+      "output": 669
+    },
+    "total": {
+      "input": 12091,
+      "output": 3730
+    }
+  },
+  "cost_usd": 0.0,
+  "outputs": {
+    "synthesis_json": "/Users/mani.kantan.arun/Downloads/RDE-BackLog/backlog-synthesizer/outputs/contributor/20260610_165709/synthesis.json",
+    "synthesis_md": "/Users/mani.kantan.arun/Downloads/RDE-BackLog/backlog-synthesizer/outputs/contributor/20260610_165709/synthesis.md",
+    "audit_md": "/Users/mani.kantan.arun/Downloads/RDE-BackLog/backlog-synthesizer/outputs/contributor/20260610_165709/audit_trail.md"
+  }
+}

@@ -9,24 +9,29 @@ on:
 
 jobs:
   unit-tests:
-    name: Unit tests + lint
+    name: "Unit tests (Python ${{ matrix.python-version }})"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+      fail-fast: false  # surface failures on both versions independently
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "${{ matrix.python-version }}"
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
 
       - name: Install runtime deps
         run: |
@@ -48,21 +53,95 @@ jobs:
         run: |
           mkdir -p artifacts
           python -m pytest tests/ \
-            --junit-xml=artifacts/pytest-results.xml \
+            --junit-xml=artifacts/pytest-results-${{ matrix.python-version }}.xml \
             -v
 
       - name: Upload pytest results
         if: always()  # surface report even on test failure
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-results
-          path: artifacts/pytest-results.xml
+          name: pytest-results-${{ matrix.python-version }}
+          path: artifacts/pytest-results-${{ matrix.python-version }}.xml
+          retention-days: 90
+
+  security-scan:
+    name: Security scan (SAST · CVE · secrets · lock-file)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Runs in parallel with unit-tests — no dependency needed.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history required by TruffleHog
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install scan tools
+        run: pip install bandit pip-audit pip-tools
+
+      - name: SAST — bandit (medium severity and above)
+        # -ll = medium+ severity, -ii = medium+ confidence.
+        # Excluded: tests/ (test scaffolding uses patterns that look sketchy out of context).
+        # Exit 1 only on HIGH severity (bandit exit code 1) so medium findings are
+        # uploaded as an artifact but don't break the build until reviewed.
+        run: |
+          mkdir -p artifacts
+          bandit -r src/ -ll -ii \
+            --exclude src/warmup.py \
+            --format json -o artifacts/bandit.json || true
+          # Fail the step if any HIGH severity issues are found
+          bandit -r src/ -lll -iii \
+            --exclude src/warmup.py \
+            --format json -o /dev/null
+        continue-on-error: false
+
+      - name: CVE scan — pip-audit
+        run: |
+          mkdir -p artifacts
+          pip-audit -r requirements.txt \
+            --format json \
+            --output artifacts/pip-audit.json || true
+          # Re-run without --output to get a human-readable exit code
+          pip-audit -r requirements.txt
+
+      - name: Secret scan — TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.before || 'HEAD~1' }}
+          head: HEAD
+          extra_args: --only-verified
+
+      - name: Verify requirements-lock.txt is up to date
+        # Ensures no one updated requirements.txt without regenerating the lock file.
+        # pip-compile writes to stdout in dry-run; compare against committed file.
+        run: |
+          pip-compile --generate-hashes --allow-unsafe \
+            --output-file /tmp/requirements-lock-check.txt \
+            requirements.txt 2>/dev/null
+          if ! diff -q requirements-lock.txt /tmp/requirements-lock-check.txt > /dev/null 2>&1; then
+            echo "::error::requirements-lock.txt is stale."
+            echo "Re-run: pip-compile --generate-hashes --allow-unsafe --output-file requirements-lock.txt requirements.txt"
+            diff requirements-lock.txt /tmp/requirements-lock-check.txt | head -40
+            exit 1
+          fi
+          echo "requirements-lock.txt is up to date."
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-results
+          path: artifacts/
           retention-days: 90
 
   docker-build:
     name: Docker build verification
     runs-on: ubuntu-latest
-    needs: unit-tests
+    needs: [unit-tests, security-scan]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

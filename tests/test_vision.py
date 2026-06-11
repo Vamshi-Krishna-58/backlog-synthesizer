@@ -124,21 +124,26 @@ class _FakeAnthropicResponse:
 
 
 def _patch_anthropic_client(monkeypatch, capture: list):
-    """Patch the Anthropic SDK so `messages.create` records what it was
-    called with and returns a canned response. Returns the captured list
-    of kwargs for assertions."""
+    """Patch ChatAnthropic so invoke() records the LangChain messages it
+    receives and returns a canned AIMessage response."""
     from tools import claude_tool
+    from langchain_core.messages import AIMessage
 
-    class _FakeMessages:
-        def create(self, **kwargs):
-            capture.append(kwargs)
-            return _FakeAnthropicResponse('{"summary": "ok", "topics": []}')
-
-    class _FakeClient:
+    class _FakeChatAnthropic:
         def __init__(self, *a, **kw):
-            self.messages = _FakeMessages()
+            pass
 
-    monkeypatch.setattr(claude_tool, "Anthropic", _FakeClient)
+        def bind(self, **kw):
+            return self
+
+        def invoke(self, messages, **kw):
+            capture.append(messages)
+            return AIMessage(
+                content='{"summary": "ok", "topics": []}',
+                response_metadata={"usage": {"input_tokens": 100, "output_tokens": 50}},
+            )
+
+    monkeypatch.setattr(claude_tool, "ChatAnthropic", _FakeChatAnthropic)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
 
 
@@ -155,10 +160,10 @@ def test_claude_tool_builds_multimodal_array_when_images_present(monkeypatch):
     tool.call_for_json("Extract topics from these inputs.", images=[img])
 
     assert len(capture) == 1
-    payload = capture[0]
-    msgs = payload["messages"]
-    assert isinstance(msgs[0]["content"], list)
-    blocks = msgs[0]["content"]
+    # capture[0] is the list of LangChain messages: [SystemMessage, HumanMessage]
+    human = capture[0][1]
+    blocks = human.content
+    assert isinstance(blocks, list)
     # Image first, text second.
     assert blocks[0]["type"] == "image"
     assert blocks[0]["source"]["type"] == "base64"
@@ -179,11 +184,11 @@ def test_claude_tool_sends_plain_string_when_no_images(monkeypatch):
     tool = ClaudeTool(model="claude-sonnet-4-5")
     tool.call_for_json("text only prompt")
 
-    payload = capture[0]
-    msgs = payload["messages"]
-    # Should still be a plain string, not a multimodal list.
-    assert isinstance(msgs[0]["content"], str)
-    assert "text only" in msgs[0]["content"]
+    # capture[0] is [SystemMessage, HumanMessage]
+    human = capture[0][1]
+    # Without images the content stays as a plain string.
+    assert isinstance(human.content, str)
+    assert "text only" in human.content
 
 
 def test_claude_tool_handles_multiple_images(monkeypatch):
@@ -198,7 +203,7 @@ def test_claude_tool_handles_multiple_images(monkeypatch):
     tool = ClaudeTool(model="claude-sonnet-4-5")
     tool.call_for_json("prompt", images=[img1, img2])
 
-    blocks = capture[0]["messages"][0]["content"]
+    blocks = capture[0][1].content  # HumanMessage.content
     assert len(blocks) == 3
     assert blocks[0]["type"] == "image"
     assert blocks[1]["type"] == "image"

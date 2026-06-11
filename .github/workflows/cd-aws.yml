@@ -1,0 +1,258 @@
+name: Deploy → AWS
+
+# Runs automatically on every push to main (after CI passes in ci.yml).
+# Can also be triggered manually to re-deploy any ref without a code change.
+#
+# Pipeline: build + push ECR → deploy ECS staging → smoke test → deploy ECS prod (manual gate)
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   AWS_ACCESS_KEY_ID       IAM access key for the GitHub Actions deploy user
+#   AWS_SECRET_ACCESS_KEY   IAM secret key for the GitHub Actions deploy user
+#   AWS_REGION              e.g. us-east-1
+#   AWS_ECR_REGISTRY        e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com
+#   AWS_ECS_CLUSTER         e.g. backlog-synthesizer
+#   AWS_ALB_NAME            e.g. backlog-synthesizer  (used to look up the staging health URL)
+#
+# Required GitHub Environments (Settings → Environments):
+#   aws-staging    — no protection rules; auto-deploys on every push to main
+#   aws-production — add "Required reviewers" to enforce a manual approval gate
+#
+# ECS task definition families (created by scripts/aws_setup.sh):
+#   backlog-synthesizer-staging
+#   backlog-synthesizer
+#
+# ECS service names (created by scripts/aws_setup.sh):
+#   backlog-synthesizer-staging  (in cluster AWS_ECS_CLUSTER)
+#   backlog-synthesizer          (in cluster AWS_ECS_CLUSTER)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_staging:
+        description: Skip staging and deploy directly to production (emergency only)
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_IMAGE: ${{ secrets.AWS_ECR_REGISTRY }}/backlog-synthesizer
+
+jobs:
+  # ── 1. Build image and push to Elastic Container Registry ────────────────
+  push-ecr:
+    name: Build & push → ECR
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      image: ${{ steps.img.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.ECR_IMAGE }}:${{ github.sha }}
+            ${{ env.ECR_IMAGE }}:latest
+          # Warm the GHA layer cache so unchanged layers (Python deps ~1 GB)
+          # are reused across runs — saves ~4 min per deploy after the first.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record image reference
+        id: img
+        run: echo "image=${{ env.ECR_IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Deploy to ECS staging ──────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → ECS staging
+    runs-on: ubuntu-latest
+    needs: push-ecr
+    if: ${{ !inputs.skip_staging }}
+    environment: aws-staging
+    timeout-minutes: 15
+    outputs:
+      health_url: ${{ steps.health.outputs.url }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Download current staging task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition backlog-synthesizer-staging \
+            --query taskDefinition \
+            > /tmp/task-def-staging.json
+
+      - name: Inject new image into task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: /tmp/task-def-staging.json
+          container-name: backlog-synthesizer
+          image: ${{ needs.push-ecr.outputs.image }}
+
+      - name: Deploy to ECS staging service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: backlog-synthesizer-staging
+          cluster: ${{ secrets.AWS_ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 10
+
+      - name: Resolve staging health URL
+        id: health
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "${{ secrets.AWS_ALB_NAME }}" \
+            --query "LoadBalancers[0].DNSName" \
+            --output text)
+          # Staging listener is on port 8080 (as configured by aws_setup.sh).
+          echo "url=http://$ALB_DNS:8080/_stcore/health" >> "$GITHUB_OUTPUT"
+          echo "Staging health endpoint: http://$ALB_DNS:8080/_stcore/health"
+
+  # ── 3. Smoke test staging ─────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test — ECS staging health
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    timeout-minutes: 5
+
+    steps:
+      - name: Wait for healthy response (2-min window, 10-s intervals)
+        run: |
+          URL="${{ needs.deploy-staging.outputs.health_url }}"
+          echo "Probing: $URL"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "Attempt $i/12: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && { echo "ECS staging healthy."; exit 0; }
+            sleep 10
+          done
+          echo "ERROR: health endpoint did not return 200 within 2 minutes." >&2
+          exit 1
+
+  # ── 4. Deploy to production (requires manual approval) ───────────────────
+  deploy-prod:
+    name: Deploy → ECS production
+    runs-on: ubuntu-latest
+    needs: [push-ecr, smoke-test]
+    if: ${{ always() && needs.push-ecr.result == 'success' && (needs.smoke-test.result == 'success' || inputs.skip_staging) }}
+    environment: aws-production    # ← add "Required reviewers" in repo Settings
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Download current production task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition backlog-synthesizer \
+            --query taskDefinition \
+            > /tmp/task-def-prod.json
+
+      - name: Inject new image into task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: /tmp/task-def-prod.json
+          container-name: backlog-synthesizer
+          image: ${{ needs.push-ecr.outputs.image }}
+
+      - name: Enable ECS deployment circuit-breaker (auto-rollback)
+        run: |
+          aws ecs update-service \
+            --cluster "${{ secrets.AWS_ECS_CLUSTER }}" \
+            --service backlog-synthesizer \
+            --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true},maximumPercent=150,minimumHealthyPercent=100" \
+            --output none
+          echo "Deployment circuit-breaker enabled (auto-rollback on health-check failure)"
+
+      - name: Deploy to ECS production (rolling canary — 1 task at a time)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: backlog-synthesizer
+          cluster: ${{ secrets.AWS_ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 15
+          deployment-configuration: "maximumPercent=150,minimumHealthyPercent=100"
+
+      - name: Verify production health
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "${{ secrets.AWS_ALB_NAME }}" \
+            --query "LoadBalancers[0].DNSName" \
+            --output text)
+          URL="http://$ALB_DNS/_stcore/health"
+          echo "Probing: $URL"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "Attempt $i/18: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && { echo "ECS production healthy."; echo "Live at: http://$ALB_DNS"; exit 0; }
+            sleep 10
+          done
+          echo "ERROR: production health check failed." >&2
+          exit 1
+
+      - name: Canary soak — monitor error rate (3 min)
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "${{ secrets.AWS_ALB_NAME }}" \
+            --query "LoadBalancers[0].DNSName" \
+            --output text)
+          URL="http://$ALB_DNS/_stcore/health"
+          echo "Canary soak: probing $URL every 15 s for 3 minutes..."
+          FAILURES=0
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
+            echo "Probe $i/12: HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              FAILURES=$((FAILURES + 1))
+              echo "  WARN: non-200 response (failure count: $FAILURES)"
+            fi
+            [ $i -lt 12 ] && sleep 15
+          done
+          if [ "$FAILURES" -gt 2 ]; then
+            echo "ERROR: $FAILURES/12 health probes failed during canary soak — deployment may be unstable." >&2
+            echo "ECS deployment circuit-breaker will auto-rollback if tasks continue failing."
+            exit 1
+          fi
+          echo "Canary soak passed ($FAILURES/12 probe failures — within tolerance)."
+
+      - name: Rollback notice
+        if: failure()
+        run: |
+          echo "::warning::Production deploy failed. ECS deployment circuit-breaker is configured" \
+               "to auto-rollback to the previous task definition." \
+               "Check ECS service events in AWS console for details."

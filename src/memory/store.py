@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,40 @@ logger = get_logger(__name__)
 _RETRIEVAL_THRESHOLD = 20  # Below this, skip embeddings and return everything.
 _DEFAULT_CACHE_DIR = Path(".cache") / "memory"
 _EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+
+# ---- Process-level embedder singleton ----------------------------------------
+# The sentence-transformer model takes ~300ms to load on a CPU-only container.
+# Loading it once and reusing the instance across all MemoryStore objects avoids
+# blocking every new run that needs duplicate detection.
+_EMBEDDER_SINGLETON: Any = None
+_EMBEDDER_LOCK = threading.Lock()
+
+
+def _get_embedder() -> Any:
+    """Return the shared SentenceTransformer instance, loading it once."""
+    global _EMBEDDER_SINGLETON
+    if _EMBEDDER_SINGLETON is None:
+        with _EMBEDDER_LOCK:
+            if _EMBEDDER_SINGLETON is None:
+                from sentence_transformers import SentenceTransformer
+                logger.info("Loading embedding model %s …", _EMBEDDING_MODEL)
+                _EMBEDDER_SINGLETON = SentenceTransformer(_EMBEDDING_MODEL)
+                logger.info("Embedding model loaded")
+    return _EMBEDDER_SINGLETON
+
+
+def preload_embedder() -> None:
+    """Warm up the embedding model in a daemon background thread.
+
+    Call once at process start (e.g. right after start_metrics_server() in
+    app.py) so the first synthesis that needs duplicate detection does not
+    pay the 300ms load cost inline.
+    """
+    threading.Thread(
+        target=_get_embedder,
+        daemon=True,
+        name="embedder-preload",
+    ).start()
 
 
 class MemoryStore:
@@ -54,6 +89,7 @@ class MemoryStore:
         cache_dir: Path | None = None,
     ) -> None:
         self._kv: dict[str, Any] = {}
+        self._written_keys: set[str] = set()  # tracks keys written via put()/append()
         self._embedder = None  # Lazy-loaded sentence-transformer
         self._np = None
         self._ticket_vectors = None
@@ -78,6 +114,7 @@ class MemoryStore:
 
     def put(self, key: str, value: Any) -> None:
         self._kv[key] = value
+        self._written_keys.add(key)
         if self._persistent:
             self._persist_kv(key, value)
 
@@ -86,8 +123,13 @@ class MemoryStore:
         if key not in self._kv:
             self._kv[key] = []
         self._kv[key].append(value)
+        self._written_keys.add(key)
         if self._persistent:
             self._persist_kv(key, self._kv[key])
+
+    def all_keys(self) -> set[str]:
+        """Return the set of all keys currently held in the KV store."""
+        return set(self._kv.keys())
 
     # ----------------------------------------------------- KV persistence
 
@@ -120,16 +162,43 @@ class MemoryStore:
     # ----------------------------------------------------- ChromaDB backend
 
     def _init_chromadb(self) -> None:
-        """Initialise a file-backed ChromaDB client + collection."""
+        """Initialise a ChromaDB client + collection.
+
+        Two modes:
+        - CHROMADB_SERVER_URL set → HttpClient pointing at an external Chroma
+          server (can be made HA with multiple replicas behind a load balancer).
+          This eliminates the single-volume SPOF.
+        - Unset (default) → PersistentClient backed by a local directory.
+          Fast and zero-config for single-pod deployments; a volume failure
+          loses the index (recoverable by re-running index_tickets on the
+          next synthesis).
+        """
+        _server_url = os.environ.get("CHROMADB_SERVER_URL", "").strip()
         try:
             import chromadb
-            chroma_path = str(self._cache_dir / "chroma")
-            client = chromadb.PersistentClient(path=chroma_path)
+            if _server_url:
+                # External HA server — parse host/port from the URL.
+                # Expected format: http[s]://host:port  (port defaults to 8000)
+                from urllib.parse import urlparse
+                _parsed = urlparse(_server_url)
+                _host = _parsed.hostname or "localhost"
+                _port = _parsed.port or 8000
+                _ssl  = _parsed.scheme == "https"
+                client = chromadb.HttpClient(host=_host, port=_port, ssl=_ssl)
+                client.heartbeat()  # fail fast if unreachable at startup
+                logger.info("ChromaDB HttpClient connected to %s", _server_url)
+            else:
+                chroma_path = str(self._cache_dir / "chroma")
+                client = chromadb.PersistentClient(path=chroma_path)
+                logger.info(
+                    "ChromaDB PersistentClient ready at %s "
+                    "(single-volume — set CHROMADB_SERVER_URL for HA)",
+                    chroma_path,
+                )
             self._chroma_collection = client.get_or_create_collection(
                 name="backlog_tickets",
                 metadata={"hnsw:space": "cosine"},
             )
-            logger.info("ChromaDB persistent collection ready at %s", chroma_path)
         except ImportError:
             logger.warning("chromadb not installed — falling back to NPZ vector cache")
             self._use_chromadb = False
@@ -142,8 +211,7 @@ class MemoryStore:
         if self._chroma_collection is None:
             return False
         try:
-            from sentence_transformers import SentenceTransformer
-            embedder = SentenceTransformer(_EMBEDDING_MODEL)
+            embedder = _get_embedder()
             texts = [self._ticket_text(t) for t in tickets]
             ids   = [str(t.get("id", f"ticket_{i}")) for i, t in enumerate(tickets)]
             vecs  = embedder.encode(texts, convert_to_numpy=True,
@@ -170,9 +238,7 @@ class MemoryStore:
         if self._chroma_collection is None or not self._tickets_for_vectors:
             return list(self._tickets_for_vectors)
         try:
-            from sentence_transformers import SentenceTransformer
-            if self._embedder is None:
-                self._embedder = SentenceTransformer(_EMBEDDING_MODEL)
+            self._embedder = _get_embedder()
             qvec = self._embedder.encode([query_text], convert_to_numpy=True,
                                          normalize_embeddings=True, show_progress_bar=False)
             results = self._chroma_collection.query(
@@ -242,7 +308,7 @@ class MemoryStore:
                     logger.info("Hydrated %d embeddings from cache", len(tickets))
                     return True
 
-            self._embedder = SentenceTransformer(_EMBEDDING_MODEL)
+            self._embedder = _get_embedder()
             texts = [self._ticket_text(t) for t in tickets]
             self._ticket_vectors = self._embedder.encode(
                 texts,
@@ -269,8 +335,7 @@ class MemoryStore:
         if self._ticket_vectors is None:
             return list(self._tickets_for_vectors)
         if self._embedder is None:
-            from sentence_transformers import SentenceTransformer
-            self._embedder = SentenceTransformer(_EMBEDDING_MODEL)
+            self._embedder = _get_embedder()
         query_vec = self._embedder.encode(
             [query_text],
             convert_to_numpy=True,

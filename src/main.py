@@ -65,21 +65,6 @@ def parse_args() -> argparse.Namespace:
         help="Directory to write outputs to (default: outputs/)",
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Load inputs but don't call the API; print what would be sent.",
-    )
-    parser.add_argument(
-        "--redact-pii",
-        action="store_true",
-        help=(
-            "Replace emails, phone numbers, claim/policy/case IDs, SSNs, card "
-            "numbers, and conservatively-matched personal names with stable "
-            "placeholders BEFORE sending to the LLM. The synthesis is un-redacted "
-            "in the final output; the audit log stays redacted for compliance."
-        ),
-    )
-    parser.add_argument(
         "--confluence-page-id",
         default=None,
         help=(
@@ -155,12 +140,6 @@ def main() -> int:
         except InputError as e:
             logger.warning("Could not load backlog (continuing without): %s", e)
 
-    if args.dry_run:
-        print(f"[dry-run] Transcript chars: {len(transcript_text)}")
-        print(f"[dry-run] Constraint chars: {len(constraint_text)}")
-        print(f"[dry-run] Existing tickets: {len(existing_tickets)}")
-        return 0
-
     # ---- Run the multi-agent orchestrator ----
     # Live-mode hints flow through to Orchestrator.run; the orchestrator
     # records both success and failure of the fetch in the audit log so
@@ -193,7 +172,6 @@ def main() -> int:
             transcript_text=transcript_text,
             constraint_text=constraint_text,
             existing_tickets=existing_tickets,
-            redact_pii=args.redact_pii,
             live_confluence_page_id=args.confluence_page_id,
             live_jira=args.live_jira,
             vision_attachments=vision_attachments,
