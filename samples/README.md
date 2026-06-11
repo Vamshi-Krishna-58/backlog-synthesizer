@@ -1,53 +1,53 @@
 # Sample inputs
 
-These files describe a single fictional product — **NorthStar Retail**, a national chain of ~2,000 supermarkets and big-box stores across the US — across the three input types the Backlog Synthesizer accepts.
+These files describe a single fictional product — **ApexDrive Connected Vehicle Platform**, a software platform powering connected vehicles for Apex Motors, a fictional automotive OEM with ~500,000 active connected vehicles on the road — across the three input types the Backlog Synthesizer accepts.
 
 The four source documents and two ticket exports cross-reference each other so the agents have genuine overlaps, conflicts, and gaps to find. A reviewer can verify the synthesis is correct by spot-checking these intentional flags.
 
-## The NorthStar Retail fiction in one paragraph
+## The ApexDrive fiction in one paragraph
 
-NorthStar Retail runs about 2,000 stores nationwide, from urban grocery formats to suburban big-box destinations carrying grocery, electronics, apparel, home goods, pharmacy, and auto service. Engineering supports the point-of-sale lanes in every store, a consumer mobile app, an e-commerce site, the loyalty program, inventory and warehouse systems, pharmacy fulfillment (including the **Rx Hub** system of record for prescriptions), a vendor portal for ~50,000 suppliers, and store-associate tooling (handheld scanners running both legacy Android 7 hardware and a pilot Android 13 fleet).
+ApexDrive is the software platform behind Apex Motors' connected vehicle experience. It supports OTA firmware updates for ~500,000 vehicles, a driver companion app (iOS/Android), an EV charging integration layer, connected services subscriptions, a warranty and recall management system (**RecallHub**, the system of record for all warranty claims), a dealer portal for ~3,000 service centres, and technician tooling (dealer diagnostic tablets running Android 13 as well as a legacy Gen1 TCU fleet in 2018–2020 model-year vehicles).
 
 ## The files
 
 | File | What it is | Notable details |
 |---|---|---|
-| `meeting_notes.txt` | Customer Experience Q3 planning meeting transcript | Five themes raised; one (self-checkout) explicitly declined; cross-references the architectural constraints in `architecture_constraints.md` and several existing JIRA tickets |
-| `architecture_constraints.md` | Engineering architecture wiki page | Performance budgets, required integrations (NSID, PaymentGateway, Rx Hub), security rules (PCI, HIPAA, OFAC), offline tolerance per hardware tier, and forbidden patterns |
-| `product_strategy.md` | Q3 strategy document from the VP of CX | Same themes as the meeting notes but formal; tags P0 vs P1; explicitly excludes self-checkout, vendor portal, B2B tier |
-| `jira_backlog.json` | 30 existing JIRA tickets | Multiple intentional overlaps with the meeting notes (NS-412 search staleness, NS-419 mainframe scrape, NS-227 Kafka migration). Triggers RAG path (≥20 items). |
-| `github_issues.json` | 6 existing GitHub issues | A second source of existing work; some overlap with JIRA, some unique (e.g., #1041 curbside GPS) |
+| `meeting_notes.txt` | Connected Vehicle Experience Q3 planning meeting transcript | Five themes raised; one (in-vehicle drive-through payment) explicitly declined; cross-references the architectural constraints in `architecture_constraints.md` and several existing JIRA tickets |
+| `architecture_constraints.md` | Engineering architecture wiki page | Performance budgets, required integrations (VIS, ConnectedPaymentGateway, RecallHub), security rules (PCI, GDPR/CCPA, ISO 26262, UNECE WP.29), offline tolerance per hardware tier, and forbidden patterns |
+| `product_strategy.md` | Q3 strategy document from the VP of Connected Experience | Same themes as the meeting notes but formal; tags P0 vs P1; explicitly excludes in-vehicle payment, dealer portal redesign, B2B fleet dashboard |
+| `jira_backlog.json` | 30 existing JIRA tickets | Multiple intentional overlaps with the meeting notes (AD-412 charger availability, AD-419 VIN scraping, AD-227 Kafka migration). Triggers RAG path (≥20 items). |
+| `github_issues.json` | 6 existing GitHub issues | A second source of existing work; some overlap with JIRA, some unique (e.g., #1041 remote climate GPS location) |
 
 ## Intentional flags the agents should find
 
-When the synthesizer runs against these inputs together, here is what a correct run should produce:
+When the synthesiser runs against these inputs together, here is what a correct run should produce:
 
 ### Duplicates (new story ↔ existing ticket)
 
 | Topic from meeting notes | Should be flagged as duplicate of | Confidence |
 |---|---|---|
-| Search returns out-of-stock items | `NS-412` (in-progress) + GitHub `#1247` | High |
-| Mobile app polling for inventory | (n/a — this surfaces from constraints, see "gaps" below) | — |
-| Loyalty tier confusion | `NS-389` (tier-downgrade email) + GitHub `#1102` | Medium-to-high |
-| Curbside pickup wrong-store | GitHub `#1041` | High |
+| Navigation returns unavailable EV chargers | `AD-412` (in-progress) + GitHub `#1247` | High |
+| Driver app polling for charger status | (n/a — surfaces from constraints, see "gaps" below) | — |
+| Subscription tier confusion | `AD-389` (trial expiry email) + GitHub `#1102` | Medium-to-high |
+| Remote climate wrong-vehicle dispatch | GitHub `#1041` | High |
 
 ### Conflicts (story ↔ architecture constraint)
 
 | Story idea | Conflicts with constraint | Severity |
 |---|---|---|
-| "Process card sales offline at the POS" — anyone proposing this | "Card sales when WAN is down: FORBIDDEN" (Section 4) | High |
-| "Show personalized prices based on inventory state" | "Price personalization based on customer segment or inventory state requires Legal sign-off" (Section 3) | Medium |
-| "Use BLE central role on handheld for inventory beacons" | "Legacy Android 7 handheld cannot use BLE central role" (Section 4) | High if it doesn't gate by hardware |
+| "Auto-rollback safety-critical ECU updates" — anyone proposing this | "Automatic rollback of safety-critical updates is FORBIDDEN without a validated rollback image" (Section 3) | High |
+| "Boost sponsored charging networks in navigation based on commercial deal" | "Placement boost requires disclosure and Legal review" (Section 3) | Medium |
+| "Use Gen1 TCU background download for large firmware packages" | "Gen1 TCU background OTA downloads cannot run more than 90 minutes without user acknowledgement" (Section 4) | High if it doesn't gate by hardware |
 
 ### Gaps (implied but missing from both new stories and existing backlog)
 
 The agents should also surface things the strategy/transcript *implies* but neither the new stories nor existing tickets cover. Examples a reviewer should expect:
 
-- HIPAA opt-in capture flow (the strategy mentions opt-in pharmacy notifications but no story addresses *how* the patient opts in)
-- WAN-failure detection and switchover heuristics for the POS (offline mode is mentioned but the *trigger* for going offline isn't designed)
-- The audit log retention extension (existing NS-321 covers this — so this is actually NOT a gap; the agent should recognize it's covered)
+- **Owner consent capture flow for warranty notifications** (the strategy mentions consent-based claim notifications but no story addresses *how* the owner opts in)
+- **OTA stall detection and recovery heuristics** (offline resilience is mentioned but the *trigger* for declaring a stall and resuming normal operation isn't designed)
+- **The audit log retention extension** (existing AD-321 covers this — so this is actually NOT a gap; the agent should recognise it's covered)
 
-## Sample sizes and threshold behavior
+## Sample sizes and threshold behaviour
 
 - `jira_backlog.json` has **30 tickets**, which is above the `RETRIEVAL_THRESHOLD=20` in `src/memory/store.py`. This triggers the embedding-based semantic search path.
 - `github_issues.json` has only 6, so they're included in the LLM prompt directly without retrieval narrowing.

@@ -1,73 +1,74 @@
-# NorthStar Retail — Engineering Architecture Constraints
+# ApexDrive Connected Vehicle Platform — Engineering Architecture Constraints
 
 **Owner:** Architecture Review Board
 **Last reviewed:** March 2026
-**Audience:** All product engineering teams. This page captures the constraints any new initiative must respect or formally exception out of.
+**Audience:** All vehicle software and platform engineering teams. This page captures the constraints any new initiative must respect or formally exception out of.
 
 ---
 
 ## 1. Performance budgets
 
-- **Mobile app cart-load p95** must stay under **1.5 seconds on a 3G connection**. We measure with synthetic transactions hourly. Regressions block release.
-- **POS lane transaction latency** for a single SKU scan must stay under **250ms p95** including the network round trip. If the network is degraded, see Section 4.
-- **Search query latency p95** in the mobile app and on the web must stay under **800ms**. The search service is rate-limited at the edge to protect this.
+- **Driver app remote command latency p95** (e.g., remote climate, lock/unlock) must complete end-to-end under **3 seconds on an LTE connection**. We measure with synthetic transactions hourly. Regressions block release.
+- **In-vehicle HMI response time** for a driver-initiated action (navigation search, media select) must stay under **200ms p95** at the head unit. If the cellular link is degraded, see Section 4.
+- **Navigation POI search p95** in the driver app must stay under **800ms**. The search service is rate-limited at the edge to protect this budget.
 
 ## 2. Required integrations
 
-- All customer identity must flow through **NorthStar Identity (NSID)**. New auth flows MUST NOT introduce a separate customer credential store. Federation with NSID is the only supported pattern.
-- All payment authorization MUST go through the **PaymentGateway** service. Direct calls to card processors are forbidden — this is a PCI scope requirement.
-- All prescription-related operations MUST go through the **Rx Hub** service. Rx Hub is the only system of record for prescriptions; writes to other stores cause reconciliation failures.
+- All vehicle and owner identity must flow through **VehicleIdentityService (VIS)**. New auth flows MUST NOT introduce a separate credential store. VIN-bound identity federation with VIS is the only supported pattern.
+- All in-vehicle and in-app payment authorization MUST go through the **ConnectedPaymentGateway**. Direct calls to card processors are forbidden — this is a PCI scope requirement.
+- All warranty and recall operations MUST go through the **RecallHub** service. RecallHub is the system of record for warranty claims and NHTSA-linked recall actions; writes to other stores cause reconciliation failures.
 
 ## 3. Security and compliance
 
-- **PCI scope reduction.** Card data must never touch our application servers. PaymentGateway hands back a tokenized reference; our code stores only the token.
-- **HIPAA.** Any feature that surfaces a medication name (push notifications, emails, SMS, in-app text) requires:
-  - Explicit patient opt-in stored on the prescription record
-  - Delivery only to the patient's *verified* contact method, never the household account default
+- **PCI scope reduction.** Card data must never touch our application servers. ConnectedPaymentGateway hands back a tokenized reference; our code stores only the token.
+- **GDPR / CCPA.** Any feature that surfaces a specific defect code, health condition linked to a recall, or precise location history requires:
+  - Explicit owner consent stored on the vehicle record
+  - Delivery only to the owner's *verified* contact method, never the shared fleet account default
   - Audit log of every notification sent, retained 7 years
-- **Sanctions screening.** Customer-facing payment flows must screen the customer name against the OFAC SDN list before any transaction over $10,000. This is handled by PaymentGateway; do not bypass it.
-- **Advertising compliance.** Price personalization based on customer segment or inventory state requires disclosure and Legal review. Cannot ship without sign-off.
+- **UNECE WP.29 / ISO 21434 cybersecurity.** All OTA update packages must be cryptographically signed by the ApexDrive Code Signing Authority. Unsigned or self-signed packages must be rejected at the TCU.
+- **ISO 26262 functional safety.** Updates to safety-critical ECUs (braking, steering, ADAS) require offline validation in the Hardware-in-the-Loop (HIL) test environment before any vehicle deployment. Automatic rollback of safety-critical updates is FORBIDDEN without a validated rollback image.
+- **Advertising compliance.** Placement boost for charging networks or service partners based on commercial agreements requires disclosure and Legal review. Cannot ship without sign-off.
 
-## 4. Offline tolerance (in-store hardware)
+## 4. Offline tolerance (in-vehicle and connectivity loss)
 
-- **POS lanes** MUST continue to process **cash sales** even when the WAN is down. The local SQLite cache holds the SKU catalog and refreshes hourly when online.
-- **Returns under $50** MUST be processable offline. Returns over $50 require manager approval and online authorization.
-- **Card sales** when the WAN is down: FORBIDDEN. PCI requires online auth.
-- **Store-associate handhelds** running Android 7 (legacy hardware in stores until the FY26 refresh) cannot use:
-  - BLE central role (only peripheral supported)
-  - Camera2 API features beyond preview + still capture
-  - Background services that run more than 60 seconds
+- **Core driving functions** (navigation map rendering, climate control, media playback from local cache) MUST continue to operate when the cellular link is lost. No core driving feature may be cloud-dependent.
+- **Remote commands** (lock/unlock, climate pre-condition, horn) that arrive while offline MUST be queued and executed within 60 seconds of connectivity restoration, provided they are still within their validity window.
+- **Safety-critical features** (AEB, lane-keep, emergency call pre-trigger) MUST NEVER depend on cellular connectivity.
+- **Gen1 TCU vehicles** (2018–2020 model years) cannot receive:
+  - Differential (delta) OTA packages — full firmware images only, max 4 GB per update
+  - TLS 1.3 connections — TLS 1.2 is the floor for Gen1
+  - Background OTA downloads that run more than 90 minutes without user acknowledgement
 
-Stories that depend on functionality unavailable on Android 7 must explicitly say so and either gate by hardware capability or wait for the refresh.
+Stories that depend on capabilities unavailable on Gen1 TCU must explicitly declare the hardware floor and either gate by VehicleGeneration or target Gen2 only.
 
 ## 5. Data residency
 
-- Customer PII for US customers must remain in our US-East and US-West regions. Cross-region replication to APAC/EU is forbidden under the current privacy program.
-- Analytics aggregates (no PII) may flow to our central data warehouse in US-East.
+- Driver PII for EU owners must remain in our EU-West and EU-Central regions. Cross-region replication to US/APAC is forbidden under the current GDPR program.
+- Telematics aggregates (no PII, anonymised) may flow to our central data warehouse in US-East.
 
 ## 6. Forbidden patterns
 
-- **Polling for inventory updates** from the mobile app at intervals shorter than 60 seconds. Use the inventory event stream instead.
-- **Synchronous calls** from any consumer-facing surface to the legacy mainframe (`HOST/3270`). Always go through the integration broker.
-- **Custom encryption.** Use the platform KMS and our standard libraries. Rolling your own crypto is forbidden.
-- **Direct database access** to the loyalty system from non-loyalty services. Use the Loyalty API.
+- **Polling vehicle telemetry** from the cloud at intervals shorter than 30 seconds. Use the telematics event stream instead.
+- **Direct CAN bus writes** from any application-layer service. All actuator commands must go through the in-vehicle Gateway ECU with validated message authentication codes (MACs).
+- **Custom encryption.** Use the platform KMS and our standard TLS/DTLS libraries. Rolling your own crypto is forbidden.
+- **Direct database access** to the RecallHub warranty tables from non-RecallHub services. Use the RecallHub API.
 
 ## 7. Recommended defaults (should, not must)
 
-- Feature flagging via LaunchDarkly for any change that touches a customer-facing surface
+- Feature flagging via LaunchDarkly for any change that touches a driver-facing surface
 - Server-driven UI for any flow that changes more than monthly
 - gRPC for service-to-service; REST only for external/partner APIs
 - All new services emit OpenTelemetry traces by default
 
 ## 8. Hardware capabilities reference
 
-| Hardware | OS / Platform | Notes |
+| Hardware | Platform | Notes |
 |---|---|---|
-| POS lane | Custom Linux, embedded x86 | Online by default; offline fallback per Section 4 |
-| Store handheld (legacy) | Android 7 | Limited APIs per Section 4. Replacement Q1 FY26. |
-| Store handheld (new pilot) | Android 13 | Pilot in 50 stores. Build to Android 9+ baseline. |
-| Pharmacy workstation | Windows 11, Edge | No mobile patterns; desktop-first UX |
-| Customer mobile app | iOS 16+, Android 9+ | Below floor = legacy maintenance mode only |
+| Gen1 TCU (2018–2020) | Custom Linux, ARM Cortex-A7, 512 MB RAM | TLS 1.2 only; full OTA packages only; max 4 GB. Refresh Q1 FY26. |
+| Gen2 TCU (2021+) | Custom Linux, ARM Cortex-A55, 2 GB RAM | TLS 1.3; differential OTA; background download |
+| Head Unit (HMI) | Android Automotive OS 12+ | Navigation, media, settings; 3P app store gated |
+| Dealer diagnostic tablet | Android 13, ruggedised | Technician tooling; must work on workshop Wi-Fi with no cellular |
+| Driver companion app | iOS 16+, Android 9+ | Below floor = legacy maintenance mode only |
 
 ---
 
