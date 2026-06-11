@@ -128,16 +128,19 @@ jobs:
           extra_args: --only-verified
 
       - name: Verify requirements-lock.txt is up to date
-        # Ensures no one updated requirements.txt without regenerating the lock file.
-        # pip-compile writes to stdout in dry-run; compare against committed file.
+        # Write directly to requirements-lock.txt so pip-compile embeds the
+        # correct path in the header comment — writing to a temp file would
+        # produce a spurious 1-line diff on every run.
+        # git diff then tells us whether the committed file is stale.
         run: |
           pip-compile --generate-hashes --allow-unsafe \
-            --output-file /tmp/requirements-lock-check.txt \
+            --output-file requirements-lock.txt \
             requirements.txt 2>/dev/null
-          if ! diff -q requirements-lock.txt /tmp/requirements-lock-check.txt > /dev/null 2>&1; then
+          if ! git diff --quiet requirements-lock.txt; then
             echo "::error::requirements-lock.txt is stale."
             echo "Re-run: pip-compile --generate-hashes --allow-unsafe --output-file requirements-lock.txt requirements.txt"
-            diff requirements-lock.txt /tmp/requirements-lock-check.txt | head -40
+            git diff requirements-lock.txt | head -60
+            git checkout requirements-lock.txt
             exit 1
           fi
           echo "requirements-lock.txt is up to date."
