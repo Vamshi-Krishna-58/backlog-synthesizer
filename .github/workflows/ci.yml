@@ -101,11 +101,25 @@ jobs:
       - name: CVE scan — pip-audit
         run: |
           mkdir -p artifacts
+          # Full scan → JSON artifact (never blocks, captures all findings).
           pip-audit -r requirements.txt \
             --format json \
             --output artifacts/pip-audit.json || true
-          # Re-run without --output to get a human-readable exit code
-          pip-audit -r requirements.txt
+          # Blocking run — fail on any unfixed CVE that is NOT in the
+          # acknowledged list below.  Each entry must include the CVE ID,
+          # the affected package, and why we cannot upgrade yet.
+          #
+          # CVE-2026-45829  chromadb 1.5.9   — no fix released upstream; chromadb
+          #                                    is optional (USE_CHROMADB=0 disables).
+          #                                    Revisit when chromadb > 1.5.9 ships.
+          # CVE-2025-69872  diskcache 5.6.3  — transitive dep of chromadb; 5.6.3 is
+          #                                    the latest available. No fix upstream.
+          # CVE-2025-3000   torch 2.12.0     — transitive dep of sentence-transformers;
+          #                                    no fixed torch version published yet.
+          pip-audit -r requirements.txt \
+            --ignore-vuln CVE-2026-45829 \
+            --ignore-vuln CVE-2025-69872 \
+            --ignore-vuln CVE-2025-3000
 
       - name: Secret scan — TruffleHog
         uses: trufflesecurity/trufflehog@main
