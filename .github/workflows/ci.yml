@@ -77,7 +77,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # Must match the Python version used to generate requirements-lock.txt
+          # (local dev uses Python 3.13, Dockerfile also uses 3.13).
+          python-version: "3.13"
 
       - name: Install scan tools
         run: pip install bandit pip-audit pip-tools

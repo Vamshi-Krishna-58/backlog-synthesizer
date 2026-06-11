@@ -18,10 +18,11 @@
 #       --backlog samples/jira_backlog.json
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
-# Pinned to a specific digest so builds are fully reproducible even if
-# upstream pushes a new patch to the "3.11-slim-bookworm" tag.
-# To update: docker pull python:3.11-slim-bookworm && docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim-bookworm
-FROM python:3.11-slim-bookworm@sha256:ad48727984d3a64ab5ae0a977b08d1eb75f9e57a3b1e22cdc3bacc2edc3e7ce4 AS builder
+# Python 3.13 matches local development and the pip-compiled requirements-lock.txt.
+# To pin to a specific digest (recommended for production):
+#   docker pull python:3.13-slim-bookworm
+#   docker inspect --format='{{index .RepoDigests 0}}' python:3.13-slim-bookworm
+FROM python:3.13-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -50,7 +51,7 @@ RUN pip install --upgrade pip \
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM python:3.11-slim-bookworm@sha256:ad48727984d3a64ab5ae0a977b08d1eb75f9e57a3b1e22cdc3bacc2edc3e7ce4
+FROM python:3.13-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -59,7 +60,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     # Tell Python where the builder-stage packages landed.
-    PYTHONPATH=/usr/local/lib/python3.11/site-packages
+    PYTHONPATH=/usr/local/lib/python3.13/site-packages
 
 # curl: required by HEALTHCHECK.
 # libgomp1: required by sentence-transformers / numpy on slim images.
