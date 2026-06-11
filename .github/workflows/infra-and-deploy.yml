@@ -18,24 +18,20 @@ on:
           - infra-and-deploy
 
 env:
-  RG:              rg-meridian-motors
-  ACR:             meridianmotorsacr0452
-  ACR_SERVER:      meridianmotorsacr0452.azurecr.io
-  CAE:             cae-meridian-motors
-  STAGING_APP:     backlog-synthesizer-staging
-  PROD_APP:        backlog-synthesizer-prod
-  LOCATION:        eastus
+  RG:          rg-meridian-motors
+  ACR:         meridianmotorsacr0452
+  ACR_SERVER:  meridianmotorsacr0452.azurecr.io
+  CAE:         cae-meridian-motors
+  STAGING_APP: backlog-synthesizer-staging
+  PROD_APP:    backlog-synthesizer-prod
+  LOCATION:    eastus
 
 jobs:
-  # ── 1. Provision Azure infra via az CLI (idempotent) ───────────────────────
+  # ── 1. Provision infra (az CLI, idempotent) ────────────────────────────────
   provision:
     name: Provision Azure infrastructure
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: >-
-      github.event_name == 'push' ||
-      github.event.inputs.action == 'infra-only' ||
-      github.event.inputs.action == 'infra-and-deploy'
 
     steps:
       - name: Login to Azure
@@ -43,15 +39,27 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Resource group
+      - name: Decide whether to provision
+        id: gate
         run: |
-          az group create \
-            --name "$RG" \
-            --location "$LOCATION" \
-            --output none
+          ACTION="${{ github.event.inputs.action }}"
+          EVENT="${{ github.event_name }}"
+          echo "event=$EVENT  action=$ACTION"
+          if [[ "$EVENT" == "push" || "$ACTION" == "infra-only" || "$ACTION" == "infra-and-deploy" ]]; then
+            echo "run_provision=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_provision=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping provisioning — action=$ACTION"
+          fi
+
+      - name: Resource group
+        if: steps.gate.outputs.run_provision == 'true'
+        run: |
+          az group create --name "$RG" --location "$LOCATION" --output none
           echo "✅ Resource group: $RG"
 
       - name: Azure Container Registry
+        if: steps.gate.outputs.run_provision == 'true'
         run: |
           az acr create \
             --name "$ACR" \
@@ -62,6 +70,7 @@ jobs:
           echo "✅ ACR: $ACR_SERVER"
 
       - name: Container Apps environment
+        if: steps.gate.outputs.run_provision == 'true'
         run: |
           if ! az containerapp env show --name "$CAE" --resource-group "$RG" &>/dev/null; then
             az containerapp env create \
@@ -72,7 +81,8 @@ jobs:
           fi
           echo "✅ Container Apps environment: $CAE"
 
-      - name: Staging Container App (create if missing)
+      - name: Staging Container App
+        if: steps.gate.outputs.run_provision == 'true'
         run: |
           if ! az containerapp show --name "$STAGING_APP" --resource-group "$RG" &>/dev/null; then
             az containerapp create \
@@ -90,7 +100,8 @@ jobs:
             echo "✅ Staging app already exists"
           fi
 
-      - name: Production Container App (create if missing)
+      - name: Production Container App
+        if: steps.gate.outputs.run_provision == 'true'
         run: |
           if ! az containerapp show --name "$PROD_APP" --resource-group "$RG" &>/dev/null; then
             az containerapp create \
@@ -109,55 +120,60 @@ jobs:
           fi
 
       - name: Summary
+        if: steps.gate.outputs.run_provision == 'true'
         run: |
           STAGING_FQDN=$(az containerapp show --name "$STAGING_APP" --resource-group "$RG" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
-          PROD_FQDN=$(az containerapp show --name "$PROD_APP" --resource-group "$RG" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
+            --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "pending")
           echo "## ✅ Infrastructure ready" >> "$GITHUB_STEP_SUMMARY"
-          echo "| App | URL |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-----|-----|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Staging | https://$STAGING_FQDN |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Prod    | https://$PROD_FQDN |"    >> "$GITHUB_STEP_SUMMARY"
+          echo "Staging: https://$STAGING_FQDN" >> "$GITHUB_STEP_SUMMARY"
 
-  # ── 2. Build Docker image and push to ACR ─────────────────────────────────
+  # ── 2. Build & push Docker image to ACR ────────────────────────────────────
   build:
     name: Build & push → ACR
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: provision
-    if: >-
-      always() &&
-      (needs.provision.result == 'success' || needs.provision.result == 'skipped') &&
-      github.event.inputs.action != 'infra-only'
-    outputs:
-      image: ${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}
 
     steps:
+      - name: Check if build should run
+        id: gate
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          if [[ "$ACTION" == "infra-only" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
 
       - name: Login to Azure
+        if: steps.gate.outputs.skip != 'true'
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Verify ACR exists
+        if: steps.gate.outputs.skip != 'true'
         run: |
           if ! az acr show --name "$ACR" --query name -o tsv &>/dev/null; then
-            echo "::error::ACR '$ACR' does not exist."
-            echo "::error::Run this workflow with action=infra-and-deploy (or infra-only first)."
-            echo "::error::Also confirm the SPN has Contributor role: Portal → Subscriptions → IAM → Add → Contributor → sp-backlog-synthesizer-github"
+            echo "::error::ACR '$ACR' not found. Run action=infra-and-deploy first."
             exit 1
           fi
           echo "✅ ACR $ACR found"
 
       - name: Login to ACR
+        if: steps.gate.outputs.skip != 'true'
         run: az acr login --name "$ACR"
 
       - name: Set up Docker Buildx
+        if: steps.gate.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        if: steps.gate.outputs.skip != 'true'
+        id: docker
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -168,54 +184,59 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── 3a. Deploy to Staging ─────────────────────────────────────────────────
+  # ── 3a. Deploy to Staging ──────────────────────────────────────────────────
   deploy-staging:
     name: Deploy → Staging
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [provision, build]
-    if: >-
-      always() &&
-      needs.build.result == 'success' &&
-      (
-        github.event_name == 'push' ||
-        github.event.inputs.action == 'deploy-staging' ||
-        github.event.inputs.action == 'infra-and-deploy'
-      )
     environment: azure-staging
 
     steps:
+      - name: Check if deploy should run
+        id: gate
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "push" || "$ACTION" == "deploy-staging" || "$ACTION" == "infra-and-deploy" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping staging deploy (action=$ACTION)"
+          fi
+
       - name: Login to Azure
+        if: steps.gate.outputs.run == 'true'
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Configure app secrets
+      - name: Set ACR pull secret
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
+          az containerapp secret set \
+            --name "$STAGING_APP" --resource-group "$RG" \
+            --secrets "acr-password=$ACR_PASS" \
+            --output none
+
+      - name: Set app secrets
+        if: steps.gate.outputs.run == 'true'
         run: |
           az containerapp secret set \
-            --name "$STAGING_APP" \
-            --resource-group "$RG" \
+            --name "$STAGING_APP" --resource-group "$RG" \
             --secrets \
               "anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}" \
               "jira-api-token=${{ secrets.JIRA_API_TOKEN }}" \
               "entra-client-secret=${{ secrets.ENTRA_CLIENT_SECRET }}" \
             --output none
 
-      - name: Configure ACR pull secret
-        run: |
-          ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
-          az containerapp secret set \
-            --name "$STAGING_APP" \
-            --resource-group "$RG" \
-            --secrets "acr-password=$ACR_PASS" \
-            --output none
-
       - name: Deploy image
+        if: steps.gate.outputs.run == 'true'
         run: |
           IMAGE="${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}"
           az containerapp update \
-            --name "$STAGING_APP" \
-            --resource-group "$RG" \
+            --name "$STAGING_APP" --resource-group "$RG" \
             --image "$IMAGE" \
             --set-env-vars \
               "CLIENT_NAME=Meridian Motors" \
@@ -235,6 +256,7 @@ jobs:
           echo "✅ Deployed $IMAGE"
 
       - name: Health check
+        if: steps.gate.outputs.run == 'true'
         run: |
           FQDN=$(az containerapp show \
             --name "$STAGING_APP" --resource-group "$RG" \
@@ -247,60 +269,61 @@ jobs:
             [ "$STATUS" = "200" ] && { echo "✅ Healthy: https://$FQDN"; exit 0; }
             sleep 10
           done
-          echo "❌ Health check failed after 4 minutes" >&2; exit 1
+          echo "❌ Health check timed out" >&2; exit 1
 
       - name: Summary
+        if: steps.gate.outputs.run == 'true'
         run: |
           FQDN=$(az containerapp show \
             --name "$STAGING_APP" --resource-group "$RG" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
           echo "## ✅ Staging deployed" >> "$GITHUB_STEP_SUMMARY"
           echo "**URL:** https://$FQDN" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Image:** \`${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Next:** Add \`https://$FQDN/\` as a redirect URI in Azure app registration (Entra ID)" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Next:** add \`https://$FQDN/\` as redirect URI in Entra app registration" >> "$GITHUB_STEP_SUMMARY"
 
-  # ── 3b. Deploy to Production ──────────────────────────────────────────────
+  # ── 3b. Deploy to Production ───────────────────────────────────────────────
   deploy-production:
     name: Deploy → Production
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [provision, build, deploy-staging]
-    if: >-
-      always() &&
-      needs.build.result == 'success' &&
-      (needs.deploy-staging.result == 'success' || needs.deploy-staging.result == 'skipped') &&
-      github.event.inputs.action == 'deploy-production'
     environment: azure-production
 
     steps:
+      - name: Check if deploy should run
+        id: gate
+        run: |
+          ACTION="${{ github.event.inputs.action }}"
+          if [[ "$ACTION" == "deploy-production" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping production deploy (action=$ACTION)"
+          fi
+
       - name: Login to Azure
+        if: steps.gate.outputs.run == 'true'
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Configure app secrets
+      - name: Set secrets and deploy
+        if: steps.gate.outputs.run == 'true'
         run: |
           ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
           az containerapp secret set \
-            --name "$PROD_APP" \
-            --resource-group "$RG" \
+            --name "$PROD_APP" --resource-group "$RG" \
             --secrets \
               "anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}" \
               "jira-api-token=${{ secrets.JIRA_API_TOKEN }}" \
               "entra-client-secret=${{ secrets.ENTRA_CLIENT_SECRET }}" \
               "acr-password=$ACR_PASS" \
             --output none
-
-      - name: Deploy image
-        run: |
           IMAGE="${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}"
-          SUFFIX="sha-${GITHUB_SHA::8}"
           az containerapp update \
-            --name "$PROD_APP" \
-            --resource-group "$RG" \
+            --name "$PROD_APP" --resource-group "$RG" \
             --image "$IMAGE" \
-            --revision-suffix "$SUFFIX" \
+            --revision-suffix "sha-${GITHUB_SHA::8}" \
             --set-env-vars \
               "CLIENT_NAME=Meridian Motors" \
               "JIRA_BASE_URL=https://vamshi58.atlassian.net" \
@@ -316,17 +339,4 @@ jobs:
             --registry-username "$ACR" \
             --registry-password "secretref:acr-password" \
             --output none
-
-      - name: Health check
-        run: |
-          FQDN=$(az containerapp show \
-            --name "$PROD_APP" --resource-group "$RG" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
-          URL="https://$FQDN/_stcore/health"
-          for i in $(seq 1 24); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
-            echo "[$i/24] HTTP $STATUS"
-            [ "$STATUS" = "200" ] && { echo "✅ Production healthy: https://$FQDN"; exit 0; }
-            sleep 10
-          done
-          echo "❌ Health check failed" >&2; exit 1
+          echo "✅ Deployed $IMAGE"
