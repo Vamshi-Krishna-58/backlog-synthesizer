@@ -1,0 +1,34 @@
+output "resource_group_name" {
+  value = azurerm_resource_group.main.name
+}
+
+output "acr_login_server" {
+  value = azurerm_container_registry.main.login_server
+}
+
+output "acr_admin_username" {
+  value     = azurerm_container_registry.main.admin_username
+  sensitive = true
+}
+
+output "container_app_env_domain" {
+  value = azurerm_container_app_environment.main.default_domain
+}
+
+output "staging_url" {
+  value = "https://${azurerm_container_app.staging.ingress[0].fqdn}"
+}
+
+output "prod_url" {
+  value = "https://${azurerm_container_app.prod.ingress[0].fqdn}"
+}
+
+output "staging_entra_redirect_uri" {
+  description = "Update ENTRA_REDIRECT_URI GitHub secret and Azure app registration with this value"
+  value       = "https://${azurerm_container_app.staging.ingress[0].fqdn}/"
+}
+
+output "prod_entra_redirect_uri" {
+  description = "Update ENTRA_REDIRECT_URI GitHub secret and Azure app registration with this value"
+  value       = "https://${azurerm_container_app.prod.ingress[0].fqdn}/"
+}

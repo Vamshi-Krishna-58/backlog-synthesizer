@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Never commit terraform.tfvars to git — it contains secrets.
+
+# Azure credentials (Service Principal)
+subscription_id = "0452d8ce-bb2a-433b-9b8f-ab0f3912aeac"
+tenant_id       = "5812d1e2-7392-48c9-9265-ba6c08c62346"
+client_id       = "717f29e5-34d4-4f8f-bb23-051df37aa246"
+client_secret   = "<sp-backlog-synthesizer-github client secret>"
+
+# App secrets
+anthropic_api_key   = "<your Anthropic API key>"
+google_api_key      = "<your Google Gemini API key>"
+jira_api_token      = "<your Jira API token>"
+entra_client_secret = "<your Entra SSO client secret>"
