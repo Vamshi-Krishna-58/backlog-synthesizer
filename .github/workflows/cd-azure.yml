@@ -1,33 +1,47 @@
 name: Deploy → Azure
 
-# Runs automatically on every push to main (after CI passes in ci.yml).
-# Can also be triggered manually to re-deploy any ref without a code change.
+# Trigger:
+#   • Push to main        → deploys to staging automatically
+#   • workflow_dispatch   → choose target environment from the dropdown
 #
-# Pipeline: build + push ACR → deploy staging → smoke test → canary deploy (10 %, manual gate) → canary verify → canary promote (100 %)
+# Pipeline:
+#   staging only       → build → deploy staging → smoke test
+#   production         → build → canary deploy (10%) → verify → promote (100%)
+#   staging→production → build → staging → smoke test → canary deploy → verify → promote
 #
 # Required GitHub Secrets (Settings → Secrets → Actions):
 #   AZURE_CREDENTIALS          JSON from `az ad sp create-for-rbac --sdk-auth`
 #   ACR_REGISTRY               e.g. backlogsynth.azurecr.io
 #   AZURE_RESOURCE_GROUP       e.g. rg-backlog-synthesizer
-#   CONTAINERAPP_NAME          prod Container App name, e.g. backlog-synthesizer
-#   CONTAINERAPP_NAME_STAGING  staging Container App name, e.g. backlog-synthesizer-staging
+#   CONTAINERAPP_NAME          prod Container App name
+#   CONTAINERAPP_NAME_STAGING  staging Container App name
 #
 # Required GitHub Environments (Settings → Environments):
-#   azure-staging    — no protection rules; auto-deploys on every push to main
-#   azure-production — add "Required reviewers" to enforce a manual approval gate
+#   azure-staging    — no protection rules
+#   azure-production — add "Required reviewers" for manual approval gate
 
 on:
   push:
     branches: [main]
+
   workflow_dispatch:
     inputs:
-      skip_staging:
-        description: Skip staging and deploy directly to production (emergency only)
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+          - staging → production
+      skip_smoke_test:
+        description: "Skip smoke test (emergency production deploy only)"
         type: boolean
         default: false
 
 jobs:
-  # ── 1. Build image and push to Azure Container Registry ──────────────────
+  # ── 1. Build & push to Azure Container Registry ──────────────────────────
   push-acr:
     name: Build & push → ACR
     runs-on: ubuntu-latest
@@ -44,7 +58,6 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Login to ACR
-        # Strip the .azurecr.io suffix to get the short registry name for az acr login.
         run: |
           ACR_NAME=$(echo "${{ secrets.ACR_REGISTRY }}" | sed 's/\.azurecr\.io//')
           az acr login --name "$ACR_NAME"
@@ -60,8 +73,6 @@ jobs:
           tags: |
             ${{ secrets.ACR_REGISTRY }}/backlog-synthesizer:${{ github.sha }}
             ${{ secrets.ACR_REGISTRY }}/backlog-synthesizer:latest
-          # Warm the GHA layer cache so subsequent runs skip unchanged layers
-          # (Python deps layer is ~1 GB; cached it saves ~4 min per deploy).
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -70,11 +81,15 @@ jobs:
         run: echo "image=${{ secrets.ACR_REGISTRY }}/backlog-synthesizer:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
   # ── 2. Deploy to staging ──────────────────────────────────────────────────
+  # Runs on: push to main (always), or manual with staging / staging→production selected
   deploy-staging:
     name: Deploy → Azure staging
     runs-on: ubuntu-latest
     needs: push-acr
-    if: ${{ !inputs.skip_staging }}
+    if: |
+      github.event_name == 'push' ||
+      inputs.environment == 'staging' ||
+      inputs.environment == 'staging → production'
     environment: azure-staging
     timeout-minutes: 10
     outputs:
@@ -102,14 +117,15 @@ jobs:
             --name "${{ secrets.CONTAINERAPP_NAME_STAGING }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "Staging: https://$FQDN"
           echo "health_url=https://$FQDN/_stcore/health" >> "$GITHUB_OUTPUT"
+          echo "Staging health: https://$FQDN/_stcore/health"
 
   # ── 3. Smoke test staging ─────────────────────────────────────────────────
   smoke-test:
     name: Smoke test — staging health
     runs-on: ubuntu-latest
     needs: deploy-staging
+    if: ${{ needs.deploy-staging.result == 'success' && inputs.skip_smoke_test != true }}
     timeout-minutes: 5
 
     steps:
@@ -126,14 +142,23 @@ jobs:
           echo "ERROR: health endpoint did not return 200 within 2 minutes." >&2
           exit 1
 
-  # ── 4. Canary deploy (10 % traffic, requires manual approval) ───────────────
+  # ── 4. Canary deploy to production (10 % traffic) ────────────────────────
+  # Runs on: manual trigger with production or staging→production selected
+  # Requires smoke test pass (or skip_smoke_test=true) when staging ran first
   canary-deploy:
     name: Canary deploy → Azure production (10 %)
     runs-on: ubuntu-latest
-    # Wait for smoke test when staging ran; skip straight here when emergency bypass used.
-    needs: [push-acr, smoke-test]
-    if: ${{ always() && needs.push-acr.result == 'success' && (needs.smoke-test.result == 'success' || inputs.skip_staging) }}
-    environment: azure-production   # ← add "Required reviewers" in repo Settings
+    needs: [push-acr, deploy-staging, smoke-test]
+    if: |
+      always() &&
+      needs.push-acr.result == 'success' &&
+      (inputs.environment == 'production' || inputs.environment == 'staging → production') &&
+      (
+        needs.smoke-test.result == 'success' ||
+        needs.smoke-test.result == 'skipped' ||
+        inputs.skip_smoke_test == true
+      )
+    environment: azure-production
     timeout-minutes: 15
     outputs:
       new_rev: ${{ steps.canary.outputs.new_rev }}
@@ -154,32 +179,27 @@ jobs:
           IMAGE="${{ needs.push-acr.outputs.image }}"
           SUFFIX="sha-${GITHUB_SHA::8}"
 
-          # Deploy new revision (no traffic yet)
           az containerapp update \
             --name "$APP" --resource-group "$RG" \
             --image "$IMAGE" \
             --revision-suffix "$SUFFIX" \
             --output none
 
-          # Wait briefly for the revision to appear
           sleep 5
 
-          # Get the new revision name (most recently created)
           NEW_REV=$(az containerapp revision list \
             --name "$APP" --resource-group "$RG" \
             --query "sort_by([].{name:name,t:properties.createdTime}, &t)[-1].name" -o tsv)
 
-          # Get the previous active revision (second most recent active)
           OLD_REV=$(az containerapp revision list \
             --name "$APP" --resource-group "$RG" \
-            --query "sort_by([?properties.active==\`true\`].{name:name,t:properties.createdTime}, &t)[-2].name" -o tsv 2>/dev/null || echo "")
+            --query "sort_by([?properties.active==\`true\`].{name:name,t:properties.createdTime}, &t)[-2].name" \
+            -o tsv 2>/dev/null || echo "")
 
-          echo "New revision: $NEW_REV"
-          echo "Old revision: ${OLD_REV:-none}"
+          echo "New revision: $NEW_REV  |  Old revision: ${OLD_REV:-none}"
           echo "new_rev=$NEW_REV" >> "$GITHUB_OUTPUT"
-          echo "old_rev=$OLD_REV" >> "$GITHUB_OUTPUT"
+          echo "old_rev=$OLD_REV"  >> "$GITHUB_OUTPUT"
 
-          # Set canary split: 10% new, 90% old (or 100% new if no old revision)
           if [ -n "$OLD_REV" ] && [ "$OLD_REV" != "$NEW_REV" ]; then
             az containerapp ingress traffic set \
               --name "$APP" --resource-group "$RG" \
@@ -207,19 +227,17 @@ jobs:
               --name "${{ secrets.CONTAINERAPP_NAME }}" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --revision-weight "$OLD_REV=100" || true
-          else
-            echo "No prior active revision recorded; skipping traffic rollback."
           fi
 
-  # ── 5. Verify canary health (automated, no approval gate) ────────────────
+  # ── 5. Verify canary health ───────────────────────────────────────────────
   canary-verify:
-    name: Verify canary health
+    name: Verify canary health (3 min)
     runs-on: ubuntu-latest
     needs: canary-deploy
     timeout-minutes: 5
 
     steps:
-      - name: Verify canary health (3-minute window, 15-s intervals)
+      - name: Probe canary (15-s intervals)
         run: |
           URL="${{ needs.canary-deploy.outputs.health_url }}"
           echo "Probing: $URL"
@@ -232,7 +250,7 @@ jobs:
           echo "ERROR: canary health endpoint did not return 200 within 3 minutes." >&2
           exit 1
 
-  # ── 6. Promote canary to 100 % traffic ───────────────────────────────────
+  # ── 6. Promote canary to 100 % ────────────────────────────────────────────
   canary-promote:
     name: Promote canary → 100 % production
     runs-on: ubuntu-latest
@@ -245,7 +263,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Promote canary to 100 % traffic
+      - name: Promote to 100 % traffic
         run: |
           NEW_REV="${{ needs.canary-deploy.outputs.new_rev }}"
           az containerapp ingress traffic set \
@@ -258,13 +276,14 @@ jobs:
         run: |
           APP="${{ secrets.CONTAINERAPP_NAME }}"
           RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
-          # List all revisions sorted by creation time; deactivate all but the two most recent
           REVS=$(az containerapp revision list \
             --name "$APP" --resource-group "$RG" \
-            --query "sort_by([].{name:name,t:properties.createdTime,active:properties.active}, &t)[:-2][].name" -o tsv)
+            --query "sort_by([].{name:name,t:properties.createdTime}, &t)[:-2][].name" \
+            -o tsv)
           for REV in $REVS; do
-            echo "Deactivating old revision: $REV"
-            az containerapp revision deactivate --name "$APP" --resource-group "$RG" --revision "$REV" --output none || true
+            echo "Deactivating: $REV"
+            az containerapp revision deactivate \
+              --name "$APP" --resource-group "$RG" --revision "$REV" --output none || true
           done
 
       - name: Verify production health
@@ -278,8 +297,31 @@ jobs:
           for i in $(seq 1 18); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")
             echo "Attempt $i/18: HTTP $STATUS"
-            [ "$STATUS" = "200" ] && { echo "Production healthy."; echo "Live at: https://$FQDN"; exit 0; }
+            [ "$STATUS" = "200" ] && { echo "Production healthy. Live at: https://$FQDN"; exit 0; }
             sleep 10
           done
           echo "ERROR: production health check failed." >&2
           exit 1
+
+  # ── 7. Summary ────────────────────────────────────────────────────────────
+  summary:
+    name: Deployment summary
+    runs-on: ubuntu-latest
+    needs: [push-acr, deploy-staging, smoke-test, canary-deploy, canary-verify, canary-promote]
+    if: always()
+    steps:
+      - name: Write job summary
+        run: |
+          echo "## Azure Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** \`${{ inputs.environment || 'staging (auto — push to main)' }}\`  " >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ needs.push-acr.outputs.image }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & push ACR     | ${{ needs.push-acr.result }} |"       >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy staging       | ${{ needs.deploy-staging.result }} |"  >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke test           | ${{ needs.smoke-test.result }} |"       >> $GITHUB_STEP_SUMMARY
+          echo "| Canary deploy (10 %) | ${{ needs.canary-deploy.result }} |"   >> $GITHUB_STEP_SUMMARY
+          echo "| Canary verify        | ${{ needs.canary-verify.result }} |"   >> $GITHUB_STEP_SUMMARY
+          echo "| Promote → 100 %      | ${{ needs.canary-promote.result }} |"  >> $GITHUB_STEP_SUMMARY
