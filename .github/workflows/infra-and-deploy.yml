@@ -39,31 +39,21 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Decide whether to provision
-        id: gate
-        run: |
-          ACTION="${{ github.event.inputs.action }}"
-          EVENT="${{ github.event_name }}"
-          echo "event=$EVENT  action=$ACTION"
-          if [[ "$EVENT" == "push" || "$ACTION" == "infra-only" || "$ACTION" == "infra-and-deploy" ]]; then
-            echo "run_provision=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run_provision=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping provisioning — action=$ACTION"
-          fi
-
       - name: Resource group
-        if: steps.gate.outputs.run_provision == 'true'
         run: |
+          set -euo pipefail
+          echo "→ Creating resource group $RG ..."
           az group create --name "$RG" --location "$LOCATION" --output none
-          echo "✅ Resource group: $RG"
+          echo "✅ Resource group ready"
 
       - name: Azure Container Registry
-        if: steps.gate.outputs.run_provision == 'true'
         run: |
-          if az acr show --name "$ACR" --resource-group "$RG" &>/dev/null; then
+          set -euo pipefail
+          echo "→ Checking ACR $ACR ..."
+          if az acr show --name "$ACR" --resource-group "$RG" --query name -o tsv 2>/dev/null | grep -q "$ACR"; then
             echo "✅ ACR already exists"
           else
+            echo "→ Creating ACR $ACR ..."
             az acr create \
               --name "$ACR" \
               --resource-group "$RG" \
@@ -74,21 +64,29 @@ jobs:
           fi
 
       - name: Container Apps environment
-        if: steps.gate.outputs.run_provision == 'true'
         run: |
-          if ! az containerapp env show --name "$CAE" --resource-group "$RG" &>/dev/null; then
+          set -euo pipefail
+          echo "→ Checking Container Apps environment $CAE ..."
+          if az containerapp env show --name "$CAE" --resource-group "$RG" --query name -o tsv 2>/dev/null | grep -q "$CAE"; then
+            echo "✅ CAE already exists"
+          else
+            echo "→ Creating Container Apps environment ..."
             az containerapp env create \
               --name "$CAE" \
               --resource-group "$RG" \
               --location "$LOCATION" \
               --output none
+            echo "✅ CAE created"
           fi
-          echo "✅ Container Apps environment: $CAE"
 
       - name: Staging Container App
-        if: steps.gate.outputs.run_provision == 'true'
         run: |
-          if ! az containerapp show --name "$STAGING_APP" --resource-group "$RG" &>/dev/null; then
+          set -euo pipefail
+          echo "→ Checking staging app $STAGING_APP ..."
+          if az containerapp show --name "$STAGING_APP" --resource-group "$RG" --query name -o tsv 2>/dev/null | grep -q "$STAGING_APP"; then
+            echo "✅ Staging app already exists"
+          else
+            echo "→ Creating staging app ..."
             az containerapp create \
               --name "$STAGING_APP" \
               --resource-group "$RG" \
@@ -99,15 +97,17 @@ jobs:
               --min-replicas 0 \
               --max-replicas 1 \
               --output none
-            echo "✅ Created staging app"
-          else
-            echo "✅ Staging app already exists"
+            echo "✅ Staging app created"
           fi
 
       - name: Production Container App
-        if: steps.gate.outputs.run_provision == 'true'
         run: |
-          if ! az containerapp show --name "$PROD_APP" --resource-group "$RG" &>/dev/null; then
+          set -euo pipefail
+          echo "→ Checking production app $PROD_APP ..."
+          if az containerapp show --name "$PROD_APP" --resource-group "$RG" --query name -o tsv 2>/dev/null | grep -q "$PROD_APP"; then
+            echo "✅ Production app already exists"
+          else
+            echo "→ Creating production app ..."
             az containerapp create \
               --name "$PROD_APP" \
               --resource-group "$RG" \
@@ -118,13 +118,10 @@ jobs:
               --min-replicas 1 \
               --max-replicas 3 \
               --output none
-            echo "✅ Created production app"
-          else
-            echo "✅ Production app already exists"
+            echo "✅ Production app created"
           fi
 
       - name: Summary
-        if: steps.gate.outputs.run_provision == 'true'
         run: |
           STAGING_FQDN=$(az containerapp show --name "$STAGING_APP" --resource-group "$RG" \
             --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "pending")
