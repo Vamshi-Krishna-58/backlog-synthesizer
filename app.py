@@ -81,7 +81,7 @@ sys.path.insert(0, str(ROOT / "src"))
 #   circuit_breaker — CLAUDE_CB / GEMINI_CB state must persist across runs so
 #                    the breaker doesn't reset on every Streamlit hot-reload.
 _src_prefix = str(ROOT / "src")
-_EVICT_SKIP = {"metrics", "circuit_breaker"}
+_EVICT_SKIP = {"metrics", "circuit_breaker", "entra_auth"}
 for _mod_name in [k for k, v in sys.modules.items()
                   if getattr(v, "__file__", None) and
                   str(getattr(v, "__file__", "")).startswith(_src_prefix) and
@@ -224,6 +224,7 @@ from entra_auth import (  # noqa: E402
     is_enabled as _entra_enabled,
     get_auth_url,
     generate_state_nonce,
+    consume_state,
     exchange_code_for_token,
     parse_user,
 )
@@ -244,19 +245,16 @@ if not _auth_disabled:
             st.stop()
 
         if _auth_code and "entra_user" not in st.session_state:
-            # CSRF / authorization-code injection protection: verify that the
-            # `state` param returned by Microsoft matches the nonce we generated
-            # before the redirect. A mismatch means someone tried to swap codes.
-            _expected_state = st.session_state.get("_oauth_state", "")
-            if not _expected_state or _returned_state != _expected_state:
+            # CSRF protection: verify the returned state against the server-side
+            # nonce store. We can't use st.session_state here because Microsoft's
+            # redirect is a fresh HTTP GET that Streamlit treats as a new session.
+            if not _returned_state or not consume_state(_returned_state):
                 st.error(
                     "Login failed: OAuth2 state mismatch — possible CSRF attempt. "
                     "Please try signing in again."
                 )
-                st.session_state.pop("_oauth_state", None)
                 st.query_params.clear()
                 st.stop()
-            st.session_state.pop("_oauth_state", None)  # consume nonce
 
             # Exchange the one-time code for a token
             with st.spinner("Signing in with Microsoft…"):
@@ -280,88 +278,149 @@ if not _auth_disabled:
             st.rerun()
 
         if "entra_user" not in st.session_state:
-            # Generate a fresh per-session nonce and store before redirecting.
-            if "_oauth_state" not in st.session_state:
-                st.session_state["_oauth_state"] = generate_state_nonce()
-            _login_url = get_auth_url(state=st.session_state["_oauth_state"])
-            # Override the full page background + hide sidebar for login screen
+            # Generate a fresh nonce each render (registered server-side by
+            # generate_state_nonce so it survives the redirect to a new session).
+            _login_url = get_auth_url(state=generate_state_nonce())
+            # Full-screen split layout — zero padding, no sidebar
             st.markdown("""
             <style>
-            /* Full-page midnight blue takeover for login */
-            .stApp, [data-testid="stAppViewContainer"] {
-                background-color: #010c1f !important;
-                background-image:
-                    radial-gradient(ellipse 800px 550px at 50% -5%, rgba(0,120,212,0.13), transparent 58%),
-                    radial-gradient(ellipse 400px 300px at 92% 95%, rgba(0,80,160,0.06), transparent 50%),
-                    radial-gradient(circle, rgba(0,120,212,0.055) 1px, transparent 1px) !important;
-                background-size: auto, auto, 28px 28px !important;
-            }
-            /* Hide sidebar entirely on login page */
             section[data-testid="stSidebar"] { display:none !important; }
-            /* Remove default padding so login-wrap can fill the viewport */
             .main .block-container,
-            [data-testid="stMainBlockContainer"] {
-                padding:0 !important; max-width:100% !important;
-            }
+            [data-testid="stMainBlockContainer"] { padding:0 !important; max-width:100% !important; }
+            .stApp, [data-testid="stAppViewContainer"] { background:#FFFFFF !important; }
             </style>
             """, unsafe_allow_html=True)
 
-            st.markdown(
-                f'<div class="login-wrap">'
+            _ms_svg = (
+                '<svg class="ms-logo" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">'
+                '<rect x="1" y="1" width="9" height="9" fill="#f25022"/>'
+                '<rect x="11" y="1" width="9" height="9" fill="#7fba00"/>'
+                '<rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>'
+                '<rect x="11" y="11" width="9" height="9" fill="#ffb900"/>'
+                '</svg>'
+            )
 
-                # ── Accenture brand bar ──────────────────────────────────
+            # SVG car silhouette — silver/graphite on dark brand panel
+            _car_svg = (
+                '<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" '
+                'style="width:100%;max-width:260px;display:block;margin:0 auto 1.5rem;">'
+                # Road
+                '<line x1="10" y1="100" x2="270" y2="100" stroke="#2D2D2D" stroke-width="2"/>'
+                # Car body
+                '<path d="M30 100 L30 72 L55 52 L100 42 L175 42 L220 52 L250 72 L250 100 Z" '
+                'fill="none" stroke="#C0C0C0" stroke-width="2" stroke-linejoin="round"/>'
+                # Roof
+                '<path d="M75 52 L95 24 L190 24 L210 52" '
+                'fill="none" stroke="#C0C0C0" stroke-width="2" stroke-linejoin="round"/>'
+                # Windscreen tint
+                '<path d="M95 24 L80 52 L100 52 Z" fill="rgba(192,192,192,0.08)"/>'
+                '<path d="M190 24 L200 52 L165 52 Z" fill="rgba(192,192,192,0.08)"/>'
+                # Front wheel
+                '<circle cx="75" cy="100" r="22" fill="none" stroke="#C0C0C0" stroke-width="2"/>'
+                '<circle cx="75" cy="100" r="10" fill="none" stroke="#888888" stroke-width="1.5"/>'
+                '<circle cx="75" cy="100" r="3"  fill="#C0C0C0"/>'
+                # Rear wheel
+                '<circle cx="205" cy="100" r="22" fill="none" stroke="#C0C0C0" stroke-width="2"/>'
+                '<circle cx="205" cy="100" r="10" fill="none" stroke="#888888" stroke-width="1.5"/>'
+                '<circle cx="205" cy="100" r="3"  fill="#C0C0C0"/>'
+                # Headlight
+                '<rect x="242" y="72" width="14" height="8" rx="2" fill="#FFFFFF" opacity="0.6"/>'
+                # Taillight
+                '<rect x="24" y="72" width="10" height="8" rx="2" fill="#888888" opacity="0.5"/>'
+                # Speed lines behind car
+                '<line x1="5" y1="65" x2="25" y2="65" stroke="#C0C0C0" stroke-width="1" opacity="0.3"/>'
+                '<line x1="2" y1="75" x2="18" y2="75" stroke="#C0C0C0" stroke-width="1" opacity="0.2"/>'
+                '<line x1="5" y1="85" x2="22" y2="85" stroke="#C0C0C0" stroke-width="1" opacity="0.15"/>'
+                '</svg>'
+            )
+
+            st.markdown(
+                # ── SPLIT SCREEN ─────────────────────────────────────────
+                f'<div class="login-split">'
+
+                # ══ LEFT: BRAND PANEL ════════════════════════════════════
+                f'<div class="login-brand-panel">'
+                f'<div class="login-brand-content">'
+
+                # Hex M badge
+                f'<div class="login-m-badge">M</div>'
+
+                # Car SVG
+                f'{_car_svg}'
+
+                # Client name
+                f'<div class="login-brand-client">'
+                f'<span class="mm-accent">MERIDIAN</span> MOTORS'
+                f'</div>'
+                f'<div class="login-brand-tagline">Connected Vehicle Intelligence Platform</div>'
+
+                # Stats row
+                f'<div class="login-brand-stats">'
+                f'<div class="login-stat"><div class="login-stat-num">5</div><div class="login-stat-label">AI Agents</div></div>'
+                f'<div class="login-stat"><div class="login-stat-num">MM</div><div class="login-stat-label">Jira Project</div></div>'
+                f'<div class="login-stat"><div class="login-stat-num">∞</div><div class="login-stat-label">Velocity</div></div>'
+                f'</div>'
+
+                # Domain badges
+                f'<div class="login-domain-badges">'
+                f'<span class="login-domain-badge"><span class="badge-icon">⚡</span>OTA Updates</span>'
+                f'<span class="login-domain-badge"><span class="badge-icon">🛡️</span>ISO 26262</span>'
+                f'<span class="login-domain-badge"><span class="badge-icon">🔋</span>EV Platform</span>'
+                f'<span class="login-domain-badge"><span class="badge-icon">📡</span>Telematics</span>'
+                f'</div>'
+
+                f'</div>'  # brand-content
+                f'</div>'  # brand-panel
+
+                # ══ RIGHT: FORM PANEL ═════════════════════════════════════
+                f'<div class="login-form-panel">'
+                f'<div class="login-form-content">'
+
+                # Accenture top label
                 f'<div class="login-acc-bar">'
-                f'accenture<span class="acc-purple">&gt;</span>'
+                f'accenture<span class="acc-chevron">&gt;</span>'
                 f'&nbsp;&nbsp;AI&#8209;First Agentic Solutions'
                 f'</div>'
 
-                # ── Main card ───────────────────────────────────────────
-                f'<div class="login-card">'
-
-                # Client name
-                f'<div class="login-client">{CLIENT_NAME}</div>'
-
-                # Product mark — diamond + name
-                f'<div class="login-product-mark">'
-                f'<div class="login-product-diamond"></div>'
-                f'<div class="login-product-name">Backlog Synthesizer</div>'
+                # Heading
+                f'<div class="login-form-heading">Backlog Synthesizer</div>'
+                f'<div class="login-form-sub">'
+                f'AI-powered backlog intelligence for {CLIENT_NAME}.<br>'
+                f'Sign in to access your workspace.'
                 f'</div>'
 
-                # Capability pills — minimal, no grid
-                f'<div class="login-pills">'
-                f'<span class="login-pill">Five-agent pipeline</span>'
-                f'<span class="login-pill-dot"></span>'
-                f'<span class="login-pill">MCP-live integrations</span>'
-                f'<span class="login-pill-dot"></span>'
-                f'<span class="login-pill">Full audit trail</span>'
+                # Orange accent bar
+                f'<div class="login-cta-bar"></div>'
+
+                # Feature grid
+                f'<div class="login-features">'
+                f'<div class="login-feature"><span class="feat-icon">🚗</span>Connected Vehicle Epics</div>'
+                f'<div class="login-feature"><span class="feat-icon">🔍</span>Conflict Detection</div>'
+                f'<div class="login-feature"><span class="feat-icon">📋</span>Five-Agent Pipeline</div>'
+                f'<div class="login-feature"><span class="feat-icon">🔗</span>MCP Jira Integration</div>'
+                f'<div class="login-feature"><span class="feat-icon">🛡️</span>Safety Guardrails</div>'
+                f'<div class="login-feature"><span class="feat-icon">📊</span>Full Audit Trail</div>'
                 f'</div>'
 
                 # Sign-in button
                 f'<a href="{_login_url}" target="_self" class="ms-signin-btn">'
-                f'<svg class="ms-logo" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">'
-                f'<rect x="1" y="1" width="9" height="9" fill="#f25022"/>'
-                f'<rect x="11" y="1" width="9" height="9" fill="#7fba00"/>'
-                f'<rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>'
-                f'<rect x="11" y="11" width="9" height="9" fill="#ffb900"/>'
-                f'</svg>'
+                f'{_ms_svg}'
                 f'Sign in with Microsoft'
                 f'</a>'
 
-                # Access note
-                f'<div class="login-access-note">'
-                f'For authorised {CLIENT_NAME} employees only.'
-                f'</div>'
+                f'<div class="login-access-note">For authorised {CLIENT_NAME} employees only.</div>'
 
-                f'</div>'  # end card
+                f'</div>'  # form-content
 
-                # Global footer — demo disclaimer
-                f'<div class="login-global-footer">'
+                # Footer
+                f'<div class="login-form-footer">'
                 f'DEMO ENVIRONMENT &nbsp;&middot;&nbsp; '
                 f'<span>Fictional client &mdash; {CLIENT_NAME}</span>'
                 f' &nbsp;&middot;&nbsp; Secured by Microsoft Entra ID'
                 f'</div>'
 
-                f'</div>',  # end wrap
+                f'</div>'  # form-panel
+                f'</div>',  # split
                 unsafe_allow_html=True,
             )
             st.stop()
@@ -1352,10 +1411,14 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.markdown(
+        '<div class="rev-bar"></div>'
         '<div class="app-header">'
-        '<span class="app-mark">◆</span>'
-        '<div><div class="app-title">Backlog Synthesizer</div>'
-        '<div class="app-tagline">Multi-agent · five specialists · audited</div></div>'
+        '<span class="app-icon">🏎️</span>'
+        '<div class="app-title-block">'
+        '<div class="app-title">Backlog Synthesizer</div>'
+        '<div class="app-tagline">🚗 Meridian Motors &nbsp;·&nbsp; ⚡ Multi-agent &nbsp;·&nbsp; 🛡️ Five specialists &nbsp;·&nbsp; 📋 Audited</div>'
+        '</div>'
+        f'<div class="app-client-chip">🏁 {CLIENT_NAME}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -2041,13 +2104,17 @@ _hdr_left, _hdr_right = st.columns(([5, 5] if _result_exists else [6, 3]),
                                    vertical_alignment="center")
 with _hdr_left:
     st.markdown(
+        '<div class="rev-bar"></div>'
         '<div class="app-header">'
-        '<span class="app-mark">◆</span>'
-        '<div><div class="app-title">Synthesize epics, stories and tasks</div>'
+        '<span class="app-icon">🏎️</span>'
+        '<div class="app-title-block">'
+        '<div class="app-title">Synthesize epics, stories &amp; tasks</div>'
         '<div class="app-tagline">'
-        "Turn a meeting transcript, an architecture wiki, and your live backlog into an "
-        "audited, conflict-checked sprint backlog — in one ~30-second multi-agent pass."
-        "</div></div></div>",
+        "🚗 Connected vehicle backlog &nbsp;·&nbsp; ⚡ OTA &amp; EV domain "
+        "&nbsp;·&nbsp; 🛡️ ISO 26262 guardrails &nbsp;·&nbsp; ~30-second multi-agent pass"
+        "</div></div>"
+        f'<div class="app-client-chip">🏁 {CLIENT_NAME}</div>'
+        "</div>",
         unsafe_allow_html=True,
     )
 with _hdr_right:

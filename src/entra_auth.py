@@ -7,6 +7,7 @@ bypassing MSAL for reliability with new Entra ID tenants.
 from __future__ import annotations
 
 import os
+import secrets
 import threading
 import time
 import urllib.parse
@@ -26,6 +27,35 @@ _BASE         = f"https://login.microsoftonline.com/{_TENANT_REF}/oauth2/v2.0"
 _SCOPES       = "openid profile"   # email scope removed — causes issues on some new tenants
 
 _ENTRA_ENABLED = bool(TENANT_ID and CLIENT_ID and CLIENT_SECRET)
+
+# ---- Server-side OAuth state store -------------------------------------------
+# Streamlit creates a NEW session when Microsoft redirects back (fresh HTTP GET),
+# so st.session_state loses the nonce. We store it server-side instead.
+# Key = state nonce, value = creation timestamp. TTL = 10 minutes.
+_STATE_STORE: dict[str, float] = {}
+_STATE_LOCK  = threading.Lock()
+_STATE_TTL   = 600.0  # seconds
+
+
+def register_state(nonce: str) -> None:
+    """Store a state nonce server-side before redirecting to Microsoft."""
+    with _STATE_LOCK:
+        _STATE_STORE[nonce] = time.monotonic()
+        # Evict expired entries so the dict doesn't grow unbounded.
+        cutoff = time.monotonic() - _STATE_TTL
+        expired = [k for k, v in _STATE_STORE.items() if v < cutoff]
+        for k in expired:
+            del _STATE_STORE[k]
+
+
+def consume_state(nonce: str) -> bool:
+    """Return True and remove the nonce if it exists and hasn't expired."""
+    with _STATE_LOCK:
+        ts = _STATE_STORE.pop(nonce, None)
+        if ts is None:
+            return False
+        return time.monotonic() - ts < _STATE_TTL
+
 
 # ---- JWKS cache ---------------------------------------------------------------
 # Microsoft rotates signing keys rarely; caching for 1 hour avoids repeated
@@ -103,16 +133,16 @@ def is_enabled() -> bool:
 
 
 def generate_state_nonce() -> str:
-    """Return a cryptographically random nonce for the OAuth2 `state` parameter.
+    """Return a cryptographically random nonce registered in the server-side store.
 
-    The caller must store this value in the session before redirecting and
-    verify that the callback's `state` query-param matches before calling
-    `exchange_code_for_token`.  This prevents CSRF / authorization-code
-    injection attacks where an attacker substitutes their own code for the
-    legitimate user's code.
+    The nonce is stored server-side (not just in Streamlit session state) so
+    it survives the redirect: Microsoft's callback is a fresh HTTP GET which
+    Streamlit treats as a new session, wiping st.session_state.
+    Use consume_state() on callback to validate and invalidate the nonce.
     """
-    import secrets
-    return secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    register_state(nonce)
+    return nonce
 
 
 def get_auth_url(state: str) -> str:
@@ -170,7 +200,10 @@ def parse_user(token_result: dict) -> dict[str, Any]:
     elif "viewer" in roles_lower:
         role = "viewer"
     else:
-        role = "viewer"
+        # No explicit app role assigned — default to contributor so any
+        # authenticated tenant user can run the demo without needing a
+        # manual role assignment in the Azure portal (requires Entra P1).
+        role = "contributor"
 
     return {
         "name":   claims.get("name") or claims.get("preferred_username", "Unknown"),
