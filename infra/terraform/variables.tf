@@ -36,7 +36,7 @@ variable "resource_group_name" {
 variable "acr_name" {
   description = "Azure Container Registry name (globally unique, alphanumeric)"
   type        = string
-  default     = "meridianmotorsacr"
+  default     = "meridianmotorsacr0452"
 }
 
 variable "acr_sku" {
