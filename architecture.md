@@ -1,4 +1,4 @@
-# Backlog Synthesizer — Architecture Diagram
+# Backlog Synthesizer — Architecture
 
 > Render this file in VS Code with the **Markdown Preview Mermaid Support** extension,
 > or open it on GitHub / any Mermaid-aware viewer.
@@ -11,6 +11,7 @@ flowchart TB
     classDef ui        fill:#4A90D9,stroke:#2C5F8A,color:#fff,rx:6
     classDef auth      fill:#7B68EE,stroke:#5A4DB0,color:#fff,rx:6
     classDef input     fill:#5BAD6F,stroke:#3D8050,color:#fff,rx:6
+    classDef guard     fill:#C0392B,stroke:#922B21,color:#fff,rx:6
     classDef orch      fill:#E8A838,stroke:#B07820,color:#fff,rx:6
     classDef node_box  fill:#F5C842,stroke:#B07820,color:#333,rx:4
     classDef agent     fill:#E06C3B,stroke:#A04820,color:#fff,rx:6
@@ -22,13 +23,16 @@ flowchart TB
     classDef eval      fill:#9B59B6,stroke:#6C3483,color:#fff,rx:6
     classDef obs       fill:#1ABC9C,stroke:#148F77,color:#fff,rx:6
     classDef preset    fill:#F39C12,stroke:#B7770D,color:#fff,rx:4
+    classDef infra     fill:#34495E,stroke:#1A252F,color:#fff,rx:6
+    classDef budget    fill:#E74C3C,stroke:#A93226,color:#fff,rx:6
+    classDef cicd      fill:#2ECC71,stroke:#1A8A4A,color:#fff,rx:6
 
     %% ─────────────────────────────────────────────────────────────────
     %% LAYER 0 — USER ENTRY POINTS
     %% ─────────────────────────────────────────────────────────────────
     subgraph ENTRY["  User Entry Points  "]
         direction LR
-        WEB["🖥️ Streamlit Web UI\napp.py\nport 8501"]:::ui
+        WEB["🖥️ Streamlit Web UI\napp.py · port 8501"]:::ui
         CLI_["⌨️ CLI\nsrc/main.py"]:::ui
     end
 
@@ -37,12 +41,24 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
     subgraph AUTH["  Authentication Layer  "]
         direction LR
-        ENTRA["🔐 Microsoft Entra ID\nSSO / OAuth2\nentra_auth.py"]:::auth
+        ENTRA["🔐 Microsoft Entra ID\nSSO / OAuth2\nentra_auth.py\nCSRF state nonce"]:::auth
         LOCAL_AUTH["🔑 Local Auth\nstreamlit-authenticator\nconfig/auth.yaml"]:::auth
     end
 
     %% ─────────────────────────────────────────────────────────────────
-    %% LAYER 2 — INPUTS
+    %% LAYER 2 — PRE-RUN GATES
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph GATES["  Pre-Run Gates (app.py)  "]
+        direction LR
+        STARTUP["🔍 Startup Checks\nstartup_check.py\ncheck_required_secrets()\ncheck_secret_formats()\nChromaDB SPOF warn"]:::guard
+        RATELIMIT["🚦 Rate Limiter\nbudget_store.py\ncheck_rate_limit()\nMAX_SYNTHESES_PER_HOUR\nMAX_SYNTHESES_PER_DAY"]:::budget
+        BUDGET["💰 Budget Gate\nbudget_store.py\ntry_reserve() atomic\nRedis Lua script\nfile fallback"]:::budget
+        IDEMPOTENT["🔁 Idempotency\nSHA-256 input hash\n60-second dedup\nwindow"]:::guard
+        SEMAPHORE["⚙️ Concurrency\nthreading.Semaphore\nMAX_CONCURRENT\n_SYNTHESES=3"]:::guard
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 3 — INPUTS
     %% ─────────────────────────────────────────────────────────────────
     subgraph INPUTS["  Input Sources  "]
         direction LR
@@ -53,46 +69,57 @@ flowchart TB
     end
 
     %% ─────────────────────────────────────────────────────────────────
-    %% LAYER 3 — ORCHESTRATION (LangGraph)
+    %% LAYER 4 — SECURITY SCANNING
     %% ─────────────────────────────────────────────────────────────────
-    subgraph ORCH["  Orchestration Layer — LangGraph StateGraph (pipeline.py)  "]
+    subgraph SECURITY["  Security Layer (src/security.py)  "]
+        direction LR
+        SANITIZER["🛡️ InputSanitizer\n8 injection rules\nPII / prompt injection\ntoxicity · redact"]:::guard
+        OUTSCANNER["🔎 OutputScanner\nGuardrail findings\nhallucination check\nbias detection"]:::guard
+        SEC_ALERT["🚨 Alerts\nalerts.py\nSlack / MS Teams\nPagerDuty webhook"]:::guard
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% LAYER 5 — ORCHESTRATION (LangGraph)
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph ORCH["  Orchestration — LangGraph StateGraph (pipeline.py)  "]
         direction TB
-        ORCH_WRAP["📦 Orchestrator\norchestrator.py\nbackward-compat wrapper"]:::orch
+        ORCH_WRAP["📦 Orchestrator\norchestrator.py\nbackward-compat wrapper\nroot pipeline.run OTel span"]:::orch
         PIPELINE["⚙️ build_pipeline()\nStateGraph compile\n+ MemorySaver"]:::orch
         STATE["📐 PipelineState TypedDict\nmemory/state.py\n24 typed fields"]:::orch
 
-        subgraph NODES["  LangGraph Nodes — Fixed Linear Sequence  "]
+        subgraph NODES["  7 LangGraph Nodes — each wrapped with _node_with_span()  "]
             direction LR
-            N0["1️⃣\ninitialize\n(live fetch +\naudit setup)"]:::node_box
-            N1["2️⃣\nparse\n(topics from\ntranscript)"]:::node_box
+            N0["1️⃣\ninitialize\nlive fetch +\nOTel span"]:::node_box
+            N1["2️⃣\nparse\ntopics from\ntranscript"]:::node_box
             N2["3️⃣\nextract_\nconstraints"]:::node_box
             N3["4️⃣\nwrite_\nstories"]:::node_box
             N4["5️⃣\ndecompose_\nepics"]:::node_box
             N5["6️⃣\ndetect_\ngaps"]:::node_box
-            N6["7️⃣\nfinalize\n(guardrails +\ntoken tally)"]:::node_box
+            N6["7️⃣\nfinalize\nguardrails +\ntoken tally"]:::node_box
             N0 --> N1 --> N2 --> N3 --> N4 --> N5 --> N6
         end
     end
 
     %% ─────────────────────────────────────────────────────────────────
-    %% LAYER 4 — AGENTS
+    %% LAYER 6 — AGENTS
     %% ─────────────────────────────────────────────────────────────────
     subgraph AGENTS["  Agent Layer (src/agents/)  "]
         direction LR
-        A1["🔍 Parser Agent\nExtract topics\n+ raw quotes\n+ summary"]:::agent
-        A2["⚖️ Constraint Agent\nExtract rules\nplatform limits\ncompliance"]:::agent
-        A3["✍️ Story Writer Agent\nDraft user stories\nAC + priority\nrepair + evidence"]:::agent
-        A4["🏗️ Epic Decomposer\nGroup stories\ninto epics\n+ tasks"]:::agent
-        A5["🔎 Gap Detector\nDuplicates\nConflicts\nCoverage gaps"]:::agent
+        A1["🔍 Parser Agent\nTopics + quotes\n+ summary"]:::agent
+        A2["⚖️ Constraint Agent\nRules / limits\ncompliance"]:::agent
+        A3["✍️ Story Writer\nGiven/When/Then AC\npriority + evidence"]:::agent
+        A4["🏗️ Epic Decomposer\nGroup stories\n+ tasks"]:::agent
+        A5["🔎 Gap Detector\nDuplicates · Conflicts\nCoverage gaps"]:::agent
     end
 
     %% ─────────────────────────────────────────────────────────────────
-    %% LAYER 5 — LLM TOOLS (LangChain-backed)
+    %% LAYER 7 — LLM TOOLS + CIRCUIT BREAKER
     %% ─────────────────────────────────────────────────────────────────
-    subgraph TOOLS["  LLM Tool Layer — LangChain Providers  "]
+    subgraph TOOLS["  LLM Tool Layer — LangChain Providers + Circuit Breaker  "]
         direction LR
-        CT["🟣 ClaudeTool\nlangchain-anthropic\nPrompt caching\nVision support"]:::tool
-        GT["🔵 GeminiTool\nlangchain-google-genai\nJSON mode"]:::tool
+        CB["⚡ Circuit Breaker\ncircuit_breaker.py\nCLOSED/OPEN/HALF_OPEN\nCLAUDE_CB · GEMINI_CB\nthreadsafe probe lock"]:::guard
+        CT["🟣 ClaudeTool\nlangchain-anthropic\nPrompt caching\nVision · max_retries=3"]:::tool
+        GT["🔵 GeminiTool\nlangchain-google-genai\nJSON mode · max_retries=3"]:::tool
         OT["🟢 OllamaTool\nlangchain-ollama\nLocal / offline\nformat=json"]:::tool
         ET["📊 EmbeddingTool\nsentence-transformers\nall-MiniLM-L6-v2\nlocal, no LLM cost"]:::tool
     end
@@ -104,12 +131,12 @@ flowchart TB
         direction LR
         P_LOCAL["🏠 Local\nAll Ollama\n~$0/run"]:::preset
         P_FREE["🆓 Free\nAll Gemini Flash\n~$0.01/run"]:::preset
-        P_BAL["⚖️ Balanced\nGemini+Claude\n~$0.20/run"]:::preset
+        P_BAL["⚖️ Balanced\nGemini + Claude\n~$0.20/run"]:::preset
         P_PREM["⭐ Premium\nAll Claude Sonnet\n~$0.80/run"]:::preset
     end
 
     %% ─────────────────────────────────────────────────────────────────
-    %% LLM PROVIDERS (external)
+    %% EXTERNAL LLM PROVIDERS
     %% ─────────────────────────────────────────────────────────────────
     subgraph PROVIDERS["  External LLM Providers  "]
         direction LR
@@ -119,13 +146,23 @@ flowchart TB
     end
 
     %% ─────────────────────────────────────────────────────────────────
-    %% MEMORY & STATE LAYER
+    %% MEMORY & STATE
     %% ─────────────────────────────────────────────────────────────────
     subgraph MEMORY["  Memory & State Layer  "]
         direction LR
-        STORE["🗄️ MemoryStore\nmemory/store.py\nKV handoff +\nvector search\nChromaDB / NPZ"]:::memory
-        AUDIT_LOG["📜 AuditLog\nmemory/audit_log.py\nSQLite + SHA-256\nhash chain\ntamper-evident"]:::memory
-        LANGGRAPH_STATE["🔗 LangGraph State\nMemorySaver\nin-process\nper thread_id"]:::memory
+        STORE["🗄️ MemoryStore\nmemory/store.py\nKV handoff + vector search\nChromaDB HttpClient (HA)\nor PersistentClient (local)"]:::memory
+        AUDIT_LOG["📜 AuditLog\nmemory/audit_log.py\nSQLite + SHA-256\nhash chain · tamper-evident"]:::memory
+        LANGGRAPH_STATE["🔗 LangGraph State\nMemorySaver\nin-process per thread_id"]:::memory
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% BUDGET & RATE STORE
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph BUDGETSTORE["  Budget & Rate Store (budget_store.py)  "]
+        direction LR
+        REDIS_STORE["🔴 Redis\nbudget:<user>:<date>\nrate:<user>:h:<hour>\nrate:<user>:d:<date>\nLua atomic reserve"]:::budget
+        FILE_STORE["📁 File Fallback\nper-user JSON files\nthreading.Lock\nsingle-pod only"]:::budget
+        SETTLE["✅ settle_reservation()\nactual − estimated\nrefund unused reserve"]:::budget
     end
 
     %% ─────────────────────────────────────────────────────────────────
@@ -138,9 +175,6 @@ flowchart TB
         MCP_T["🔗 MCP Atlassian\nmcp-atlassian server\nModel Context Protocol\nPython 3.10+"]:::integ
     end
 
-    %% ─────────────────────────────────────────────────────────────────
-    %% EXTERNAL SYSTEMS
-    %% ─────────────────────────────────────────────────────────────────
     subgraph EXTERNAL["  External Systems  "]
         direction LR
         JIRA_EXT["Jira Cloud\natlassian.net"]:::provider
@@ -152,8 +186,8 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
     subgraph OUTPUTS["  Synthesis Outputs  "]
         direction LR
-        JSON_OUT["📦 synthesis.json\nEpics / Stories / Tasks\nGaps / Conflicts\nDuplicates"]:::output
-        MD_OUT["📝 synthesis.md\nHuman-readable\nMarkdown report"]:::output
+        JSON_OUT["📦 synthesis.json\nEpics / Stories / Tasks\nGaps / Conflicts / Dups"]:::output
+        MD_OUT["📝 synthesis.md\nHuman-readable report"]:::output
         AUDIT_OUT["🔒 audit_trail.md\nFull reasoning chain\ncompliance record"]:::output
     end
 
@@ -162,7 +196,8 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
     subgraph OBS["  Observability  "]
         direction LR
-        OTEL["📡 OpenTelemetry\nPer-stage spans\nOTEL_ENABLED=1\nOTLP export"]:::obs
+        OTEL["📡 OpenTelemetry\npipeline.run root span\npipeline.node.* per node\nOTEL_ENABLED=1 · OTLP"]:::obs
+        PROM["📊 Prometheus\nsrc/metrics.py\nport 9090 /metrics\nACTIVE_SYNTHESIS\nSYNTHESIS_DURATION\nLLM_ERRORS_TOTAL\nCOST_USD_TOTAL"]:::obs
         LOGGER["📋 Structured Logger\nlogger_setup.py\nRich console output"]:::obs
     end
 
@@ -172,9 +207,20 @@ flowchart TB
     subgraph EVAL["  Evaluation Harness  "]
         direction LR
         GOLDEN["🏆 10 Golden Cases\nevaluation/golden_dataset/\nnegative / conflict /\ncompliance cases"]:::eval
-        METRICS["📏 Deterministic Metrics\nevaluation/metrics.py\nstory count / AC / F1"]:::eval
+        METRICS["📏 Deterministic Metrics\nevaluation/metrics.py\nstory count · AC coverage\nconflict recall · precision · F1"]:::eval
         JUDGE["⚖️ LLM-as-Judge\nevaluation/llm_as_judge.py\n5 quality dimensions"]:::eval
         DASH["📈 Regression Dashboard\nevaluation/dashboard.py\ndrop ≥0.10 → CI fail"]:::eval
+    end
+
+    %% ─────────────────────────────────────────────────────────────────
+    %% CI / CD
+    %% ─────────────────────────────────────────────────────────────────
+    subgraph CICD["  CI / CD (.github/workflows/)  "]
+        direction LR
+        CI["🧪 ci.yml\nruff · pytest · bandit\npip-audit · TruffleHog\nDocker build verify\neval suite (gated)"]:::cicd
+        CD_AZ["🔵 cd-azure.yml\nBuild → ACR\nstaging → smoke test\ncanary 10% → verify\n→ promote 100%\nenv dropdown"]:::cicd
+        CD_AWS["🟠 cd-aws.yml\nBuild → ECR\nstaging → smoke test\nECS rolling deploy\ncircuit breaker\nenv dropdown"]:::cicd
+        SECRET_ROT["🔑 secret-rotation-check.yml\nWeekly Monday 08:00 UTC\nAPI key liveness check\nKey Vault expiry (14d)\nSlack/Teams alert\nAuto GitHub issue"]:::cicd
     end
 
     %% ─────────────────────────────────────────────────────────────────
@@ -182,78 +228,93 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
 
     %% Entry → Auth
-    WEB --> ENTRA
-    WEB --> LOCAL_AUTH
+    WEB --> ENTRA & LOCAL_AUTH
 
-    %% Entry → Orchestration
-    WEB -->|"models, inputs,\noptions"| ORCH_WRAP
-    CLI_ -->|"--transcript\n--wiki\n--backlog"| ORCH_WRAP
+    %% Auth → Gates
+    ENTRA & LOCAL_AUTH -->|"authenticated user"| STARTUP
+    STARTUP -->|"warnings"| RATELIMIT
+    RATELIMIT -->|"allowed"| BUDGET
+    BUDGET -->|"reserved"| IDEMPOTENT
+    IDEMPOTENT --> SEMAPHORE
 
-    %% Inputs → Orchestration (via input_loader.py)
-    TRANSCRIPT -->|"input_loader.py"| ORCH_WRAP
-    WIKI -->|"input_loader.py"| ORCH_WRAP
-    BACKLOG -->|"input_loader.py"| ORCH_WRAP
-    IMAGES -->|"input_loader.py"| ORCH_WRAP
+    %% Entry + Inputs → Gates
+    TRANSCRIPT & WIKI & BACKLOG & IMAGES -->|"input_loader.py"| SANITIZER
+    SANITIZER -->|"redacted text"| SEMAPHORE
 
-    %% Orchestration internals
-    ORCH_WRAP -->|"build_pipeline()\n.invoke(state)"| PIPELINE
-    PIPELINE --> STATE
-    PIPELINE --> NODES
+    %% Security alerts
+    SANITIZER -->|"error findings"| SEC_ALERT
+    OUTSCANNER -->|"error findings"| SEC_ALERT
 
     %% Presets → Orchestrator
-    PRESETS -->|"resolved_models\ndict"| ORCH_WRAP
+    PRESETS -->|"resolved_models dict"| ORCH_WRAP
 
-    %% Nodes → Agents (each node instantiates its agent)
+    %% Gates → Orchestration
+    SEMAPHORE -->|"models, inputs, user_email"| ORCH_WRAP
+
+    %% Orchestration internals
+    ORCH_WRAP -->|"build_pipeline().invoke(state)"| PIPELINE
+    PIPELINE --> STATE & NODES
+
+    %% Nodes → Agents
     N1 -->|"ParserAgent"| A1
     N2 -->|"ConstraintAgent"| A2
     N3 -->|"StoryWriterAgent"| A3
     N4 -->|"EpicDecomposerAgent"| A4
     N5 -->|"GapDetectorAgent"| A5
 
-    %% Agents → LLM Tools (per-stage model selection)
-    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| CT
-    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| GT
-    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| OT
+    %% Agents → LLM Tools (via circuit breaker)
+    A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| CB
+    CB -->|"CLOSED / probe"| CT & GT & OT
     A5 -->|"find_duplicates()"| ET
 
     %% LLM Tools → Providers
-    CT -->|"langchain invoke\nmax_retries=3"| CLAUDE_API
-    GT -->|"langchain invoke\nmax_retries=3"| GEMINI_API
-    OT -->|"langchain invoke\nformat=json"| OLLAMA_API
+    CT -->|"max_retries=3"| CLAUDE_API
+    GT -->|"max_retries=3"| GEMINI_API
+    OT -->|"format=json"| OLLAMA_API
 
-    %% Agents ↔ Memory (adapter pattern)
-    A1 & A2 & A3 & A4 & A5 -->|"memory.put(key, val)"| STORE
-    STORE -->|"memory.get(key)"| A1 & A2 & A3 & A4 & A5
+    %% Agents ↔ Memory
+    A1 & A2 & A3 & A4 & A5 -->|"memory.put()"| STORE
+    STORE -->|"memory.get()"| A1 & A2 & A3 & A4 & A5
     STORE --> LANGGRAPH_STATE
 
     %% Agents → Audit
-    A1 & A2 & A3 & A4 & A5 -->|"audit.record()\naudit.record_tool_call()"| AUDIT_LOG
+    A1 & A2 & A3 & A4 & A5 -->|"audit.record()"| AUDIT_LOG
 
     %% Integrations
     N0 -->|"live_confluence_page_id"| CONF_T
     N0 -->|"live_jira=True"| JIRA_T
     A5 -->|"jira.list_all()"| JIRA_T
-    JIRA_T --> MCP_T
-    CONF_T --> MCP_T
-    JIRA_T -->|"REST API"| JIRA_EXT
-    CONF_T -->|"REST API"| CONF_EXT
-    MCP_T -->|"MCP"| JIRA_EXT
-    MCP_T -->|"MCP"| CONF_EXT
+    JIRA_T & CONF_T --> MCP_T
+    JIRA_T -->|"REST"| JIRA_EXT
+    CONF_T -->|"REST"| CONF_EXT
+    MCP_T -->|"MCP"| JIRA_EXT & CONF_EXT
 
-    %% Node 6 (finalize) → guardrails → outputs
-    N6 -->|"guardrails.py\nvalidation"| JSON_OUT
-    N6 --> MD_OUT
+    %% Finalize → outputs
+    N6 -->|"guardrails.py"| OUTSCANNER
+    OUTSCANNER --> JSON_OUT & MD_OUT
     AUDIT_LOG -->|"render_markdown()"| AUDIT_OUT
 
-    %% Observability connections
-    A1 & A2 & A3 & A4 & A5 -->|"child_span()"| OTEL
+    %% Budget settle after run
+    ORCH_WRAP -->|"cost_usd + increment_request_count()"| SETTLE
+    SETTLE --> REDIS_STORE
+    REDIS_STORE -.->|"fallback"| FILE_STORE
+    RATELIMIT & BUDGET --> REDIS_STORE
+
+    %% Observability
+    ORCH_WRAP -->|"pipeline.run span"| OTEL
+    N0 & N1 & N2 & N3 & N4 & N5 & N6 -->|"pipeline.node.* span"| OTEL
     CT & GT & OT -->|"llm.call span"| OTEL
+    ORCH_WRAP -->|"record_synthesis_*()"| PROM
     ORCH_WRAP --> LOGGER
 
     %% Evaluation
     JSON_OUT -->|"compare vs expected"| GOLDEN
     GOLDEN --> METRICS & JUDGE
     METRICS & JUDGE --> DASH
+
+    %% CI/CD
+    CI -->|"gates deploy"| CD_AZ & CD_AWS
+    SECRET_ROT -.->|"weekly check"| CLAUDE_API & GEMINI_API
 ```
 
 ---
@@ -262,38 +323,113 @@ flowchart TB
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| **User Interface** | `app.py`, `src/main.py` | Streamlit UI + CLI entry points |
-| **Authentication** | `src/entra_auth.py`, `config/auth.yaml` | Entra ID SSO + local username/password |
-| **Orchestration** | `src/orchestrator.py`, `src/pipeline.py` | LangGraph StateGraph, backward-compat wrapper |
+| **User Interface** | `app.py`, `src/main.py` | Streamlit UI (rate-limit badge, budget gate, guardrails tab, audit trail) + CLI |
+| **Authentication** | `src/entra_auth.py`, `config/auth.yaml` | Entra ID SSO (OAuth2 + CSRF nonce) · local username/password fallback |
+| **Pre-Run Gates** | `app.py`, `src/startup_check.py`, `src/budget_store.py` | Startup validation, secret format checks, rate limit, atomic budget reserve, idempotency dedup, concurrency semaphore |
+| **Security** | `src/security.py`, `src/alerts.py` | Input sanitisation (8 injection rules), output guardrail scanning, Slack/Teams/PagerDuty alerts |
+| **Orchestration** | `src/orchestrator.py`, `src/pipeline.py` | LangGraph StateGraph, root OTel span, backward-compat wrapper |
+| **Pipeline Nodes** | `src/pipeline.py` (`_node_with_span`) | 7 nodes each wrapped with per-node OTel span, output attribute annotations |
 | **Agents** | `src/agents/*.py` (5 files) | Specialized reasoning per stage |
-| **LLM Tools** | `src/tools/claude_tool.py`, `gemini_tool.py`, `ollama_tool.py` | LangChain-backed provider wrappers |
-| **Memory** | `src/memory/store.py`, `audit_log.py`, `state.py` | KV handoff, tamper-evident audit, LangGraph state |
-| **Integrations** | `src/tools/jira_tool.py`, `confluence_tool.py`, `mcp_atlassian_tool.py` | Atlassian REST + MCP |
-| **Evaluation** | `evaluation/*.py` + `golden_dataset/` | Regression testing + LLM-as-judge |
-| **Observability** | `src/logger_setup.py`, OpenTelemetry hooks | Structured logs + distributed tracing |
+| **LLM Tools** | `src/tools/claude_tool.py`, `gemini_tool.py`, `ollama_tool.py` | LangChain-backed provider wrappers, max_retries=3 |
+| **Circuit Breaker** | `src/circuit_breaker.py` | CLOSED/OPEN/HALF_OPEN per provider, thread-safe probe exclusivity |
+| **Embedding** | `src/tools/embedding_tool.py` | Local sentence-transformers for duplicate detection (no LLM cost) |
+| **Memory** | `src/memory/store.py`, `audit_log.py`, `state.py` | KV handoff, ChromaDB HA (HttpClient/PersistentClient), tamper-evident audit |
+| **Budget & Rate** | `src/budget_store.py` | Redis Lua atomic reserve/settle, hourly/daily request counters, file fallback |
+| **Integrations** | `src/tools/jira_tool.py`, `confluence_tool.py`, `mcp_atlassian_tool.py` | Atlassian REST + MCP Protocol |
+| **Observability** | `src/telemetry.py`, `src/metrics.py`, `src/logger_setup.py` | OTel per-node spans + root span, Prometheus metrics (port 9090), structured logs |
+| **Evaluation** | `evaluation/*.py` + `golden_dataset/` | 10 golden cases, 8 deterministic metrics (incl. conflict precision + F1), LLM-as-judge, regression dashboard |
+| **Tests** | `tests/` | Unit, load/soak (circuit breaker + atomic budget), security, vision |
+| **CI/CD** | `.github/workflows/` | Lint + test + security scan, Azure/AWS deploy with env dropdown, weekly secret rotation |
+
+---
 
 ## Data Flow Summary
 
 ```
-Transcript + Wiki + Backlog + Images
+User (authenticated via Entra ID or local auth)
          │
-    input_loader.py
+    Startup checks: secret formats, ChromaDB SPOF warning
          │
-    Orchestrator.run()
+    Pre-run gates: rate limit → atomic budget reserve → dedup → semaphore
          │
+    Input sources: Transcript + Wiki + Backlog + Images
+         │
+    InputSanitizer (8 injection rules — redact before any LLM sees the text)
+         │
+    Orchestrator.run()  ←── model preset selection
+         │                    root pipeline.run OTel span
     LangGraph pipeline.invoke()
          │
-    ┌────────────────────────────────────────────────────────┐
-    │  initialize → parse → constraints → stories →          │
-    │  epics → gap_detect → finalize                         │
-    │                                                        │
-    │  Each node: _hydrate_memory(state) → AgentX.run()      │
-    │             → _extract_memory_updates(mem) → state     │
-    └────────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  initialize → parse → constraints → stories → epics → gaps →    │
+    │  finalize                                                        │
+    │                                                                  │
+    │  Each node: _node_with_span() wraps → AgentX.run()              │
+    │             → memory.put() → OTel span attributes annotated      │
+    │                                                                  │
+    │  LLM calls: CircuitBreaker gate → ClaudeTool / GeminiTool        │
+    │             → provider API (max_retries=3)                       │
+    └──────────────────────────────────────────────────────────────────┘
          │
-    guardrails.py (post-synthesis validation)
+    OutputScanner (guardrail findings → Slack/PagerDuty alert if error)
          │
     output_formatter.py
          │
     synthesis.json + synthesis.md + audit_trail.md
+         │
+    settle_reservation(actual_cost) → increment_request_count()
+         │
+    Prometheus metrics recorded · OTel trace exported
+```
+
+---
+
+## Key Configuration Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MAX_SYNTHESES_PER_HOUR` | `0` (disabled) | Per-user hourly request rate limit |
+| `MAX_SYNTHESES_PER_DAY` | `0` (disabled) | Per-user daily request rate limit |
+| `DAILY_BUDGET_USD` | `0` (disabled) | Per-user daily spend cap in USD |
+| `MAX_CONCURRENT_SYNTHESES` | `3` | Process-level concurrency semaphore |
+| `OTEL_ENABLED` | `0` | Enable OpenTelemetry span export |
+| `REDIS_URL` | _(unset)_ | Redis for cross-pod budget + rate counters |
+| `REDIS_REQUIRED` | `0` | Fail startup if Redis unreachable |
+| `CHROMADB_SERVER_URL` | _(unset)_ | External ChromaDB server (HA mode) |
+| `USE_CHROMADB` | `0` | Enable ChromaDB vector store |
+| `ANTHROPIC_API_KEY` | _(required)_ | Anthropic Claude API key |
+| `GOOGLE_API_KEY` | _(optional)_ | Google Gemini API key |
+| `MAX_INPUT_TOKENS_PER_RUN` | `50000` | Input size pre-flight guard |
+| `SYNTHESIS_TIMEOUT_SECONDS` | `600` | Auto-cancel wall-clock timeout |
+
+---
+
+## CI/CD Pipeline
+
+```
+Push to main / Pull Request
+         │
+    ci.yml
+    ├── ruff check (F, E9) — pyflakes + syntax
+    ├── pytest (Python 3.11 + 3.13 matrix)
+    ├── bandit SAST (medium+ severity)
+    ├── pip-audit CVE scan
+    ├── TruffleHog secret scan
+    ├── requirements-lock.txt freshness check
+    └── Docker build verification (no push)
+         │
+    (on push to main only)
+    └── eval-suite — 10 golden cases, regression dashboard
+
+Manual: workflow_dispatch with environment dropdown
+    cd-azure.yml  →  staging | production | staging → production
+    cd-aws.yml    →  staging | production | staging → production
+
+Weekly (Monday 08:00 UTC):
+    secret-rotation-check.yml
+    ├── ANTHROPIC_API_KEY liveness (POST /v1/models)
+    ├── GOOGLE_API_KEY liveness
+    ├── JIRA_API_TOKEN liveness
+    ├── Azure Key Vault expiry (14-day threshold)
+    └── Slack/Teams alert + auto GitHub issue on failure
 ```
