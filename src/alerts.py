@@ -91,8 +91,6 @@ def _post_webhook(payload: dict) -> None:
     try:
         import urllib.request
         url = _WEBHOOK_URL
-        findings = payload["findings"]
-
         if "webhook.office.com" in url:
             # MS Teams adaptive-card format
             body = _teams_card(payload)

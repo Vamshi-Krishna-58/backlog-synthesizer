@@ -6,8 +6,6 @@ import os
 import time
 import threading
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Ensure src/ is importable when running from the repo root or tests/ dir.
 # ---------------------------------------------------------------------------
@@ -17,7 +15,7 @@ for _p in (_ROOT, _SRC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from security import InputSanitizer, OutputScanner, SecurityFinding
+from security import InputSanitizer, OutputScanner
 from circuit_breaker import CBState, CircuitBreaker
 
 

@@ -9,7 +9,6 @@ or mount inside a larger FastAPI app via ``mcp.http_app()``.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -93,7 +92,6 @@ def preview_prompts(stage: str = "") -> dict[str, Any]:
     Returns:
         Dict mapping stage_name -> prompt_text.  On error returns {"error": ...}.
     """
-    from pathlib import Path as _Path
     prompts_dir = ROOT / "prompts"
     stage_files = {
         "parser":          "parser_prompt.md",

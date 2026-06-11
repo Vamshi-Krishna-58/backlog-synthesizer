@@ -156,15 +156,15 @@ def is_over_budget(user_id: str, daily_limit_usd: float) -> tuple[bool, float]:
 # Redis path: a Lua script atomically checks (current + estimated <= limit) and
 # increments in one round-trip.  File fallback: per-user threading lock.
 
-_USER_LOCKS: dict[str, "threading.Lock"] = {}
-_USER_LOCKS_LOCK = __import__("threading").Lock()
+import threading as _threading
+_USER_LOCKS: dict[str, _threading.Lock] = {}
+_USER_LOCKS_LOCK = _threading.Lock()
 
 
 def _user_lock(user_id: str):
-    import threading
     with _USER_LOCKS_LOCK:
         if user_id not in _USER_LOCKS:
-            _USER_LOCKS[user_id] = threading.Lock()
+            _USER_LOCKS[user_id] = _threading.Lock()
         return _USER_LOCKS[user_id]
 
 
@@ -301,7 +301,6 @@ def _file_rate_count(user_id: str, window: str) -> int:
     try:
         from ui.run_history import _user_runs_dir
         import json as _json
-        from pathlib import Path as _Path
         runs_dir = _user_runs_dir(user_id)
         if not runs_dir.exists():
             return 0

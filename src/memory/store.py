@@ -290,7 +290,7 @@ class MemoryStore:
                 return self._chroma_index(tickets)
 
         try:
-            from sentence_transformers import SentenceTransformer
+            import sentence_transformers as _st  # noqa: F401 — availability check
             import numpy as np
         except ImportError:
             logger.warning("sentence-transformers not installed — falling back to no-embedding mode")
