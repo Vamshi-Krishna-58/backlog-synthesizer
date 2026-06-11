@@ -39,6 +39,24 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Register Azure resource providers
+        run: |
+          set -euo pipefail
+          for ns in \
+            Microsoft.ContainerRegistry \
+            Microsoft.App \
+            Microsoft.OperationalInsights \
+            Microsoft.ContainerService; do
+            STATE=$(az provider show --namespace "$ns" --query registrationState -o tsv 2>/dev/null || echo "Unknown")
+            if [[ "$STATE" != "Registered" ]]; then
+              echo "→ Registering $ns ..."
+              az provider register --namespace "$ns" --wait
+              echo "✅ $ns registered"
+            else
+              echo "✅ $ns already registered"
+            fi
+          done
+
       - name: Resource group
         run: |
           set -euo pipefail
