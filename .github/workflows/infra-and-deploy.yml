@@ -61,13 +61,17 @@ jobs:
       - name: Azure Container Registry
         if: steps.gate.outputs.run_provision == 'true'
         run: |
-          az acr create \
-            --name "$ACR" \
-            --resource-group "$RG" \
-            --sku Basic \
-            --admin-enabled true \
-            --output none 2>/dev/null || echo "ACR already exists"
-          echo "✅ ACR: $ACR_SERVER"
+          if az acr show --name "$ACR" --resource-group "$RG" &>/dev/null; then
+            echo "✅ ACR already exists"
+          else
+            az acr create \
+              --name "$ACR" \
+              --resource-group "$RG" \
+              --sku Basic \
+              --admin-enabled true \
+              --output none
+            echo "✅ ACR created: $ACR_SERVER"
+          fi
 
       - name: Container Apps environment
         if: steps.gate.outputs.run_provision == 'true'
@@ -133,6 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: provision
+    if: needs.provision.result == 'success'
 
     steps:
       - name: Check if build should run
