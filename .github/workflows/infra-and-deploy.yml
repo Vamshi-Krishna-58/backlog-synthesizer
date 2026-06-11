@@ -231,6 +231,20 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Wait for container app to be ready
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          echo "Waiting for $STAGING_APP to finish any in-progress operations..."
+          for i in $(seq 1 24); do
+            STATE=$(az containerapp show \
+              --name "$STAGING_APP" --resource-group "$RG" \
+              --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Unknown")
+            echo "[$i/24] provisioningState=$STATE"
+            [[ "$STATE" == "Succeeded" || "$STATE" == "Failed" || "$STATE" == "Canceled" ]] && break
+            sleep 10
+          done
+          echo "Ready."
+
       - name: Configure secrets and registry
         if: steps.gate.outputs.run == 'true'
         run: |
