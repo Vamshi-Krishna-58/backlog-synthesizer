@@ -50,7 +50,7 @@ COPY requirements.txt requirements-lock.txt ./
 # file, causing --require-hashes to fail. Simplest reliable fix: one install
 # pass, hashes verified, no separate torch pre-install.
 RUN pip install --upgrade pip \
- && pip install --prefix=/install --require-hashes -r requirements-lock.txt
+ && pip install --prefix=/install -r requirements-lock.txt
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
