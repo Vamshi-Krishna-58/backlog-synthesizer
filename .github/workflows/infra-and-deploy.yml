@@ -148,6 +148,17 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Verify ACR exists
+        run: |
+          ACR_NAME=$(echo "${{ secrets.ACR_REGISTRY }}" | sed 's/\.azurecr\.io//')
+          if ! az acr show --name "$ACR_NAME" --query name -o tsv &>/dev/null; then
+            echo "::error::ACR '$ACR_NAME' does not exist. Provision infra first:"
+            echo "::error::  1. Assign Contributor role to the SPN: Portal → Subscriptions → IAM → Add role assignment → Contributor → sp-backlog-synthesizer-github"
+            echo "::error::  2. Re-run this workflow with action=infra-and-deploy"
+            exit 1
+          fi
+          echo "✅ ACR $ACR_NAME found"
+
       - name: Login to ACR
         run: |
           ACR_NAME=$(echo "${{ secrets.ACR_REGISTRY }}" | sed 's/\.azurecr\.io//')
