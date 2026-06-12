@@ -41,7 +41,7 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
     subgraph AUTH["  Authentication Layer  "]
         direction LR
-        ENTRA["🔐 Microsoft Entra ID\nSSO / OAuth2\nentra_auth.py\nCSRF state nonce"]:::auth
+        ENTRA["🔐 Microsoft Entra ID\nSSO / OAuth2\nentra_auth.py\nHMAC-SHA256 signed state\nstateless CSRF — survives\ncontainer restarts"]:::auth
         LOCAL_AUTH["🔑 Local Auth\nstreamlit-authenticator\nconfig/auth.yaml"]:::auth
     end
 
@@ -109,7 +109,7 @@ flowchart TB
         A2["⚖️ Constraint Agent\nRules / limits\ncompliance"]:::agent
         A3["✍️ Story Writer\nGiven/When/Then AC\npriority + evidence"]:::agent
         A4["🏗️ Epic Decomposer\nGroup stories\n+ tasks"]:::agent
-        A5["🔎 Gap Detector\nDuplicates · Conflicts\nCoverage gaps"]:::agent
+        A5["🔎 Gap Detector\nDuplicates · Conflicts\nCoverage gaps\nmax_tokens=8000"]:::agent
     end
 
     %% ─────────────────────────────────────────────────────────────────
@@ -218,8 +218,8 @@ flowchart TB
     subgraph CICD["  CI / CD (.github/workflows/)  "]
         direction LR
         CI["🧪 ci.yml\nruff · pytest · bandit\npip-audit · TruffleHog\nDocker build verify\neval suite (gated)"]:::cicd
-        CD_AZ["🔵 cd-azure.yml\nBuild → ACR\nstaging → smoke test\ncanary 10% → verify\n→ promote 100%\nenv dropdown"]:::cicd
-        CD_AWS["🟠 cd-aws.yml\nBuild → ECR\nstaging → smoke test\nECS rolling deploy\ncircuit breaker\nenv dropdown"]:::cicd
+        CD_AZ["🔵 cd-azure.yml\nBuild → ACR\nstaging → smoke test\n(FQDN re-fetched in job)\ncanary 10% → verify\n→ promote 100%\nenv dropdown"]:::cicd
+        CD_AWS["🟠 cd-aws.yml\nBuild → ECR\nstaging → smoke test\nECS rolling deploy\ncircuit breaker\nmanual dispatch only"]:::cicd
         SECRET_ROT["🔑 secret-rotation-check.yml\nWeekly Monday 08:00 UTC\nAPI key liveness check\nKey Vault expiry (14d)\nSlack/Teams alert\nAuto GitHub issue"]:::cicd
     end
 
@@ -324,7 +324,7 @@ flowchart TB
 | Layer | Files | Responsibility |
 |---|---|---|
 | **User Interface** | `app.py`, `src/main.py` | Streamlit UI (rate-limit badge, budget gate, guardrails tab, audit trail) + CLI |
-| **Authentication** | `src/entra_auth.py`, `config/auth.yaml` | Entra ID SSO (OAuth2 + CSRF nonce) · local username/password fallback |
+| **Authentication** | `src/entra_auth.py`, `config/auth.yaml` | Entra ID SSO (OAuth2 + stateless HMAC-SHA256 signed state tokens — survives container restarts and scale-to-zero) · local username/password fallback · `ENTRA_REDIRECT_URI` injected dynamically from Azure FQDN at deploy time |
 | **Pre-Run Gates** | `app.py`, `src/startup_check.py`, `src/budget_store.py` | Startup validation, secret format checks, rate limit, atomic budget reserve, idempotency dedup, concurrency semaphore |
 | **Security** | `src/security.py`, `src/alerts.py` | Input sanitisation (8 injection rules), output guardrail scanning, Slack/Teams/PagerDuty alerts |
 | **Orchestration** | `src/orchestrator.py`, `src/pipeline.py` | LangGraph StateGraph, root OTel span, backward-compat wrapper |
@@ -347,6 +347,8 @@ flowchart TB
 
 ```
 User (authenticated via Entra ID or local auth)
+  • Entra: HMAC-SHA256 signed state token (stateless, survives container restarts)
+  • ENTRA_REDIRECT_URI injected from Azure FQDN at deploy time
          │
     Startup checks: secret formats, ChromaDB SPOF warning
          │
@@ -398,7 +400,8 @@ User (authenticated via Entra ID or local auth)
 | `CHROMADB_SERVER_URL` | _(unset)_ | External ChromaDB server (HA mode) |
 | `USE_CHROMADB` | `0` | Enable ChromaDB vector store |
 | `ANTHROPIC_API_KEY` | _(required)_ | Anthropic Claude API key |
-| `GOOGLE_API_KEY` | _(optional)_ | Google Gemini API key |
+| `GOOGLE_API_KEY` | _(optional)_ | Google Gemini API key — injected as Container App secret (`secretref:google-api-key`) on Azure |
+| `ENTRA_REDIRECT_URI` | `http://localhost:8502/` | OAuth2 callback URI — injected dynamically from Azure Container App FQDN at deploy time |
 | `MAX_INPUT_TOKENS_PER_RUN` | `50000` | Input size pre-flight guard |
 | `SYNTHESIS_TIMEOUT_SECONDS` | `600` | Auto-cancel wall-clock timeout |
 
@@ -423,7 +426,10 @@ Push to main / Pull Request
 
 Manual: workflow_dispatch with environment dropdown
     cd-azure.yml  →  staging | production | staging → production
-    cd-aws.yml    →  staging | production | staging → production
+                     smoke test re-fetches FQDN via Azure login (avoids
+                     GitHub Actions secret-masking output suppression)
+    cd-aws.yml    →  manual dispatch only (no push trigger)
+                     staging | production | staging → production
 
 Weekly (Monday 08:00 UTC):
     secret-rotation-check.yml
