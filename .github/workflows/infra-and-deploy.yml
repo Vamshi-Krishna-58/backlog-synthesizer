@@ -257,6 +257,7 @@ jobs:
             --secrets \
               "acr-password=$ACR_PASS" \
               "anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}" \
+              "google-api-key=${{ secrets.GOOGLE_API_KEY }}" \
               "jira-api-token=${{ secrets.JIRA_API_TOKEN }}" \
               "entra-client-secret=${{ secrets.ENTRA_CLIENT_SECRET }}" \
             --output none
@@ -292,6 +293,7 @@ jobs:
               "ENTRA_CLIENT_ID=786b0f93-b38d-41c7-8ebd-30a405b7385d" \
               "ENTRA_REDIRECT_URI=$REDIRECT_URI" \
               "ANTHROPIC_API_KEY=secretref:anthropic-api-key" \
+              "GOOGLE_API_KEY=secretref:google-api-key" \
               "JIRA_API_TOKEN=secretref:jira-api-token" \
               "ENTRA_CLIENT_SECRET=secretref:entra-client-secret" \
             --output none
