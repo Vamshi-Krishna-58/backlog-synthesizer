@@ -80,7 +80,9 @@ class TestEntraAuth:
         user = entra_auth.parse_user({"id_token": id_token})
         assert user["role"] == "viewer"
 
-    def test_no_roles_defaults_to_viewer(self, monkeypatch):
+    def test_no_roles_defaults_to_contributor(self, monkeypatch):
+        # Users with no explicit app role get contributor so they can use the
+        # demo without needing a manual Entra P1 role assignment in the portal.
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")
         monkeypatch.setenv("ENTRA_CLIENT_ID",     "fake-client")
         monkeypatch.setenv("ENTRA_CLIENT_SECRET", "fake-secret")
@@ -88,7 +90,7 @@ class TestEntraAuth:
         monkeypatch.setattr(entra_auth, "_verify_id_token", self._fake_verify)
         id_token = self._make_id_token({"preferred_username": "unknown@corp.com"})
         user = entra_auth.parse_user({"id_token": id_token})
-        assert user["role"] == "viewer"
+        assert user["role"] == "contributor"
 
     def test_admin_takes_priority_over_viewer(self, monkeypatch):
         monkeypatch.setenv("ENTRA_TENANT_ID",     "fake-tenant")

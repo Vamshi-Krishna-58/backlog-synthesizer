@@ -129,9 +129,21 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
       - name: Wait for healthy response (2-min window, 10-s intervals)
+        # Fetch FQDN directly — job outputs are suppressed when they contain
+        # secret values (the staging app name appears in the URL), so we
+        # re-query Azure instead of using the output from deploy-staging.
         run: |
-          URL="${{ needs.deploy-staging.outputs.health_url }}"
+          FQDN=$(az containerapp show \
+            --name "${{ secrets.CONTAINERAPP_NAME_STAGING }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          URL="https://$FQDN/_stcore/health"
           echo "Probing: $URL"
           for i in $(seq 1 12); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" 2>/dev/null || echo "000")

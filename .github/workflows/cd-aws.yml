@@ -22,9 +22,8 @@ name: Deploy → AWS
 #   aws-production — add "Required reviewers" for manual approval gate
 
 on:
-  push:
-    branches: [main]
-
+  # AWS deployment is manual-only — push to main auto-deploys to Azure only.
+  # Trigger this workflow from Actions → "Deploy → AWS" → Run workflow.
   workflow_dispatch:
     inputs:
       environment:
