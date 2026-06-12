@@ -6,6 +6,8 @@ bypassing MSAL for reliability with new Entra ID tenants.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import secrets
 import threading
@@ -19,7 +21,7 @@ TENANT_ID     = os.environ.get("ENTRA_TENANT_ID", "")
 TENANT_DOMAIN = os.environ.get("ENTRA_TENANT_DOMAIN", "")
 CLIENT_ID     = os.environ.get("ENTRA_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("ENTRA_CLIENT_SECRET", "")
-REDIRECT_URI  = os.environ.get("ENTRA_REDIRECT_URI", "http://localhost:8501/")
+REDIRECT_URI  = os.environ.get("ENTRA_REDIRECT_URI", "http://localhost:8502/")
 
 # Use domain name in authority — more reliable for new tenants than GUID
 _TENANT_REF   = TENANT_DOMAIN if TENANT_DOMAIN else TENANT_ID
@@ -27,34 +29,52 @@ _BASE         = f"https://login.microsoftonline.com/{_TENANT_REF}/oauth2/v2.0"
 _SCOPES       = "openid profile"   # email scope removed — causes issues on some new tenants
 
 _ENTRA_ENABLED = bool(TENANT_ID and CLIENT_ID and CLIENT_SECRET)
-
-# ---- Server-side OAuth state store -------------------------------------------
-# Streamlit creates a NEW session when Microsoft redirects back (fresh HTTP GET),
-# so st.session_state loses the nonce. We store it server-side instead.
-# Key = state nonce, value = creation timestamp. TTL = 10 minutes.
-_STATE_STORE: dict[str, float] = {}
-_STATE_LOCK  = threading.Lock()
-_STATE_TTL   = 600.0  # seconds
+_STATE_TTL     = 600  # seconds (10 minutes)
 
 
-def register_state(nonce: str) -> None:
-    """Store a state nonce server-side before redirecting to Microsoft."""
-    with _STATE_LOCK:
-        _STATE_STORE[nonce] = time.monotonic()
-        # Evict expired entries so the dict doesn't grow unbounded.
-        cutoff = time.monotonic() - _STATE_TTL
-        expired = [k for k, v in _STATE_STORE.items() if v < cutoff]
-        for k in expired:
-            del _STATE_STORE[k]
+# ---- Stateless HMAC-signed state tokens --------------------------------------
+# The OAuth state nonce is signed with CLIENT_SECRET so CSRF can be verified
+# without any server-side storage. This survives container restarts, scale-to-zero
+# events, and Streamlit module eviction — all of which would wipe a server-side dict.
+#
+# Token format: "<random>.<timestamp>.<hmac-sha256-hex>"
+# Verification: recompute HMAC, compare with constant-time compare, check TTL.
+
+def _sign(payload: str) -> str:
+    return hmac.new(CLIENT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def consume_state(nonce: str) -> bool:
-    """Return True and remove the nonce if it exists and hasn't expired."""
-    with _STATE_LOCK:
-        ts = _STATE_STORE.pop(nonce, None)
-        if ts is None:
+def generate_state_nonce() -> str:
+    """Return a cryptographically signed state token — no server-side storage needed."""
+    raw = secrets.token_urlsafe(32)
+    ts  = str(int(time.time()))
+    payload = f"{raw}.{ts}"
+    return f"{payload}.{_sign(payload)}"
+
+
+def consume_state(state: str) -> bool:
+    """Verify the HMAC signature and TTL of a state token returned by Microsoft."""
+    try:
+        # Split from the right so the random part (which never contains ".")
+        # and the timestamp are isolated correctly even if raw contains dots.
+        last_dot  = state.rfind(".")
+        if last_dot == -1:
             return False
-        return time.monotonic() - ts < _STATE_TTL
+        sig      = state[last_dot + 1:]
+        payload  = state[:last_dot]
+
+        # Constant-time comparison prevents timing attacks
+        if not hmac.compare_digest(_sign(payload), sig):
+            return False
+
+        # Extract timestamp (second-to-last segment)
+        ts_str = payload.rsplit(".", 1)[-1]
+        if time.time() - int(ts_str) > _STATE_TTL:
+            return False
+
+        return True
+    except Exception:
+        return False
 
 
 # ---- JWKS cache ---------------------------------------------------------------
@@ -132,17 +152,6 @@ def is_enabled() -> bool:
     return _ENTRA_ENABLED
 
 
-def generate_state_nonce() -> str:
-    """Return a cryptographically random nonce registered in the server-side store.
-
-    The nonce is stored server-side (not just in Streamlit session state) so
-    it survives the redirect: Microsoft's callback is a fresh HTTP GET which
-    Streamlit treats as a new session, wiping st.session_state.
-    Use consume_state() on callback to validate and invalidate the nonce.
-    """
-    nonce = secrets.token_urlsafe(32)
-    register_state(nonce)
-    return nonce
 
 
 def get_auth_url(state: str) -> str:
