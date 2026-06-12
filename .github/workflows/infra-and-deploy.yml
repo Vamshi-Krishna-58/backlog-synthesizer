@@ -274,6 +274,11 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ env.ACR_SERVER }}/backlog-synthesizer:${{ github.sha }}"
+          FQDN=$(az containerapp show \
+            --name "$STAGING_APP" --resource-group "$RG" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          REDIRECT_URI="https://$FQDN/"
+          echo "→ Redirect URI: $REDIRECT_URI"
           az containerapp update \
             --name "$STAGING_APP" --resource-group "$RG" \
             --image "$IMAGE" \
@@ -285,11 +290,13 @@ jobs:
               "ENTRA_TENANT_ID=5812d1e2-7392-48c9-9265-ba6c08c62346" \
               "ENTRA_TENANT_DOMAIN=vkrishna1404gmail.onmicrosoft.com" \
               "ENTRA_CLIENT_ID=786b0f93-b38d-41c7-8ebd-30a405b7385d" \
+              "ENTRA_REDIRECT_URI=$REDIRECT_URI" \
               "ANTHROPIC_API_KEY=secretref:anthropic-api-key" \
               "JIRA_API_TOKEN=secretref:jira-api-token" \
               "ENTRA_CLIENT_SECRET=secretref:entra-client-secret" \
             --output none
           echo "✅ Deployed $IMAGE"
+          echo "✅ ENTRA_REDIRECT_URI=$REDIRECT_URI"
 
       - name: Health check
         if: steps.gate.outputs.run == 'true'
