@@ -1,324 +1,382 @@
-"""
-Generate a PNG architecture diagram for the Backlog Synthesizer.
+"""Generate architecture_diagram.png for the Backlog Synthesizer.
 
-Usage:
+Run from the repo root:
     python generate_architecture_diagram.py
 
-Output:
-    architecture_diagram.png  (in the project root)
-
-Requirements:
-    pip install matplotlib
+Requires: matplotlib (already in requirements.txt)
 """
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+from matplotlib.patches import FancyBboxPatch
 
-fig, ax = plt.subplots(figsize=(28, 20))
-ax.set_xlim(0, 28)
-ax.set_ylim(0, 20)
+# ── Colour palette ────────────────────────────────────────────────────────────
+BG       = "#0d1117"
+PANEL_BG = "#161b22"
+BORDER   = "#30363d"
+
+C_AGENT    = "#1f3a5f"
+C_TOOL     = "#3a2f1f"
+C_SECURITY = "#3a1f2f"
+C_INFRA    = "#1f3a2f"
+C_AUTH     = "#2f1f3a"
+C_LLM      = "#1a3a1f"
+C_MEMORY   = "#3a3a1f"
+
+T_PRIMARY = "#e6edf3"
+T_MUTED   = "#8b949e"
+T_ACCENT  = "#58a6ff"
+T_GREEN   = "#3fb950"
+T_AMBER   = "#d29922"
+T_ROSE    = "#f85149"
+T_VIOLET  = "#bc8cff"
+T_SILVER  = "#c0c0c0"
+
+ARROW     = "#58a6ff"
+ARROW_ALT = "#3fb950"
+
+
+def box(ax, x, y, w, h, color, border_color=BORDER, radius=0.015):
+    rect = FancyBboxPatch(
+        (x, y), w, h,
+        boxstyle=f"round,pad=0,rounding_size={radius}",
+        facecolor=color, edgecolor=border_color,
+        linewidth=0.8, alpha=0.92, zorder=3,
+    )
+    ax.add_patch(rect)
+
+
+def label(ax, x, y, text, size=7, color=T_PRIMARY, weight="normal",
+          ha="center", va="center", zorder=5):
+    ax.text(x, y, text, fontsize=size, color=color, fontweight=weight,
+            ha=ha, va=va, zorder=zorder)
+
+
+def arrow(ax, x1, y1, x2, y2, color=ARROW, lw=0.9):
+    ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                arrowprops=dict(arrowstyle="->", color=color, lw=lw), zorder=4)
+
+
+def section_header(ax, x, y, w, text, color=T_MUTED):
+    label(ax, x + w / 2, y, text, size=6.5, color=color, weight="bold")
+
+
+# ── Canvas ────────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(22, 14))
+fig.patch.set_facecolor(BG)
+ax.set_facecolor(BG)
+ax.set_xlim(0, 1)
+ax.set_ylim(0, 1)
 ax.axis("off")
-fig.patch.set_facecolor("#1E1E2E")
-ax.set_facecolor("#1E1E2E")
 
-# ── colour palette ──────────────────────────────────────────────────────────
-C = {
-    "ui":       "#4A90D9",
-    "auth":     "#7B68EE",
-    "input":    "#5BAD6F",
-    "orch":     "#E8A838",
-    "node":     "#F5C842",
-    "agent":    "#E06C3B",
-    "tool":     "#D95F5F",
-    "provider": "#888888",
-    "memory":   "#4BACC6",
-    "integ":    "#70AD47",
-    "output":   "#5B9BD5",
-    "eval":     "#9B59B6",
-    "obs":      "#1ABC9C",
-    "preset":   "#F39C12",
-    "bg":       "#2A2A3E",
-    "text":     "#FFFFFF",
-    "subtext":  "#CCCCCC",
-    "arrow":    "#AAAAAA",
-    "border":   "#444466",
-}
+# Title
+ax.text(0.5, 0.977, "Backlog Synthesizer — Architecture",
+        fontsize=14, color=T_PRIMARY, fontweight="bold", ha="center", va="top", zorder=10)
+ax.text(0.5, 0.962,
+        "Multi-agent AI System  ·  LangGraph Orchestration  ·  Azure Container Apps  ·  Microsoft Entra SSO",
+        fontsize=7.5, color=T_MUTED, ha="center", va="top", zorder=10)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROW 1 — Inputs  |  Auth  |  LLM Providers
+# ═══════════════════════════════════════════════════════════════════════════════
+box(ax, 0.01, 0.840, 0.98, 0.110, PANEL_BG, border_color="#444c56")
+section_header(ax, 0.01, 0.958, 0.98,
+               "INPUTS  ·  AUTHENTICATION  ·  LLM PROVIDERS", color=T_MUTED)
 
-def box(ax, x, y, w, h, color, label, sublabel="", fontsize=8.5, radius=0.25):
-    rect = FancyBboxPatch(
-        (x, y), w, h,
-        boxstyle=f"round,pad=0.05,rounding_size={radius}",
-        linewidth=1.2, edgecolor=color,
-        facecolor=color + "33",  # 20% opacity fill
-    )
-    ax.add_patch(rect)
-    cy = y + h / 2
-    if sublabel:
-        ax.text(x + w / 2, cy + h * 0.12, label,
-                ha="center", va="center", fontsize=fontsize,
-                fontweight="bold", color=color)
-        ax.text(x + w / 2, cy - h * 0.18, sublabel,
-                ha="center", va="center", fontsize=fontsize - 1.5,
-                color=C["subtext"])
-    else:
-        ax.text(x + w / 2, cy, label,
-                ha="center", va="center", fontsize=fontsize,
-                fontweight="bold", color=color)
+# Inputs
+for i, (name, sub) in enumerate([
+    ("Transcript", ".txt / .md / .pdf"),
+    ("Vision", "Whiteboard / PNG"),
+    ("Confluence", "Live page REST"),
+    ("Jira", "Live REST / fixture"),
+]):
+    xi = 0.02 + i * 0.075
+    box(ax, xi, 0.852, 0.068, 0.075, C_TOOL)
+    label(ax, xi + 0.034, 0.897, name, size=6.5, color=T_AMBER, weight="bold")
+    label(ax, xi + 0.034, 0.880, sub, size=5.5, color=T_MUTED)
 
+# Auth
+box(ax, 0.330, 0.848, 0.270, 0.082, C_AUTH, border_color=T_VIOLET)
+label(ax, 0.465, 0.938, "AUTHENTICATION  ·  Microsoft Entra ID", size=6.5, color=T_VIOLET, weight="bold")
+label(ax, 0.465, 0.920, "HMAC-SHA256 signed state token  ·  generate_state_nonce() → raw.ts.sig", size=6, color=T_PRIMARY)
+label(ax, 0.465, 0.906, "✓ Stateless CSRF — survives container restarts & scale-to-zero  (NEW)", size=5.8, color=T_GREEN)
+label(ax, 0.465, 0.892, "consume_state(): verify HMAC + TTL 10min — no server-side storage", size=5.8, color=T_MUTED)
+label(ax, 0.465, 0.878, "ENTRA_REDIRECT_URI → set dynamically from Azure FQDN  (NEW)", size=5.8, color=T_VIOLET)
+label(ax, 0.465, 0.864, "JWT RS256 verify via PyJWKClient JWKS  ·  roles → user/admin/contributor", size=5.8, color=T_MUTED)
 
-def section_bg(ax, x, y, w, h, label, color):
-    rect = FancyBboxPatch(
-        (x, y), w, h,
-        boxstyle="round,pad=0.05,rounding_size=0.3",
-        linewidth=1.5, edgecolor=color + "88",
-        facecolor=C["bg"],
-    )
-    ax.add_patch(rect)
-    ax.text(x + 0.15, y + h - 0.18, label,
-            ha="left", va="top", fontsize=8,
-            color=color, fontweight="bold", alpha=0.9)
+# LLM Providers
+for i, (name, api, note, col) in enumerate([
+    ("Claude Sonnet 4.5", "Anthropic API", "prompt cache ≥4KB", T_GREEN),
+    ("Gemini 2.5 Flash",  "Google AI API", "GOOGLE_API_KEY ✓ NEW", T_AMBER),
+    ("Ollama llama3.2",   "localhost:11434","zero API cost", T_SILVER),
+]):
+    xi = 0.615 + i * 0.122
+    box(ax, xi, 0.852, 0.115, 0.075, C_LLM)
+    label(ax, xi + 0.0575, 0.900, name, size=6.5, color=col, weight="bold")
+    label(ax, xi + 0.0575, 0.884, api, size=5.5, color=T_MUTED)
+    label(ax, xi + 0.0575, 0.869, note, size=5.5, color=col)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROW 2 — LangGraph Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+box(ax, 0.01, 0.630, 0.98, 0.195, PANEL_BG, border_color="#444c56")
+section_header(ax, 0.01, 0.833,  0.98,
+               "LANGGRAPH PIPELINE  ·  StateGraph  ·  Parallel fan-out stages 0+1  ·  PipelineState TypedDict",
+               color=T_ACCENT)
 
-def arrow(ax, x1, y1, x2, y2, color=None, label=""):
-    color = color or C["arrow"]
-    ax.annotate("",
-        xy=(x2, y2), xytext=(x1, y1),
-        arrowprops=dict(
-            arrowstyle="-|>",
-            color=color,
-            lw=1.2,
-            connectionstyle="arc3,rad=0.0",
-        )
-    )
-    if label:
-        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        ax.text(mx + 0.1, my, label, fontsize=6.5, color=color, alpha=0.85)
+# initialize node
+box(ax, 0.018, 0.752, 0.088, 0.060, C_AGENT, border_color=T_ACCENT)
+label(ax, 0.062, 0.792, "initialize", size=7.5, color=T_ACCENT, weight="bold")
+label(ax, 0.062, 0.776, "fetch Jira / Confluence", size=5.5, color=T_MUTED)
+label(ax, 0.062, 0.764, "injection scan", size=5.5, color=T_ROSE)
+label(ax, 0.062, 0.752, "index tickets (embeddings)", size=5.2, color=T_MUTED)
 
+arrow(ax, 0.106, 0.784, 0.148, 0.800, color=ARROW)
+arrow(ax, 0.106, 0.782, 0.148, 0.762, color=ARROW)
 
-# ── TITLE ────────────────────────────────────────────────────────────────────
-ax.text(14, 19.5, "Backlog Synthesizer — Architecture",
-        ha="center", va="center", fontsize=18, fontweight="bold", color=C["text"])
-ax.text(14, 19.0, "Multi-Agent AI System  |  LangGraph Orchestration  |  LangChain LLM Layer",
-        ha="center", va="center", fontsize=10, color=C["subtext"])
+ax.text(0.128, 0.812, "parallel", fontsize=5.2, color=T_GREEN, ha="center",
+        bbox=dict(boxstyle="round,pad=0.15", facecolor="#0d2b0d", edgecolor=T_GREEN, lw=0.6))
+ax.text(0.128, 0.755, "barrier →", fontsize=5.2, color=T_AMBER, ha="center",
+        bbox=dict(boxstyle="round,pad=0.15", facecolor="#2b1a00", edgecolor=T_AMBER, lw=0.6))
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROW 1 — Inputs (left)  + User Interface (centre)  + Auth (right)
-# ═══════════════════════════════════════════════════════════════════════════
-section_bg(ax, 0.3, 15.5, 4.8, 3.0, "📥  Input Sources", C["input"])
-box(ax, 0.5, 17.6, 2.1, 0.65, C["input"], "📄 Transcripts", ".txt / .md / .pdf")
-box(ax, 2.8, 17.6, 2.1, 0.65, C["input"], "📋 Architecture Wiki", ".md constraints")
-box(ax, 0.5, 16.7, 2.1, 0.65, C["input"], "🎫 Existing Backlog", "JIRA / GitHub JSON")
-box(ax, 2.8, 16.7, 2.1, 0.65, C["input"], "🖼️ Visual Attachments", "whiteboard .png/.jpg")
-box(ax, 1.0, 15.7, 3.2, 0.65, C["input"], "input_loader.py", ".txt .md .pdf .json → normalised")
-
-section_bg(ax, 5.5, 15.5, 6.5, 3.0, "🖥️  User Entry Points", C["ui"])
-box(ax, 5.8, 17.2, 2.8, 1.0, C["ui"], "Streamlit Web UI", "app.py  •  port 8501\nSidebar + Pipeline Viz + Run History")
-box(ax, 9.0, 17.2, 2.6, 1.0, C["ui"], "CLI", "src/main.py\n--transcript --wiki --backlog")
-box(ax, 5.8, 15.8, 5.8, 1.1, C["ui"], "UI Features",
-    "Model Preset Chips  •  Vision Upload  •  Cost Panel\n"
-    "Audit Trail Tab  •  Run History  •  JIRA/Confluence Live Toggle")
-
-section_bg(ax, 12.5, 15.5, 5.2, 3.0, "🔐  Authentication", C["auth"])
-box(ax, 12.8, 17.3, 2.2, 0.9, C["auth"], "Microsoft Entra ID", "SSO / OAuth2\nentra_auth.py")
-box(ax, 15.3, 17.3, 2.1, 0.9, C["auth"], "Local Auth", "streamlit-authenticator\nconfig/auth.yaml")
-box(ax, 12.8, 15.8, 4.6, 1.2, C["auth"], "Auth Features",
-    "Per-user run history  •  Session isolation\n"
-    "Role: contributor  •  AUTH_DISABLED=1 for dev")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ROW 2 — LangGraph Orchestration Pipeline (full width)
-# ═══════════════════════════════════════════════════════════════════════════
-section_bg(ax, 0.3, 11.5, 27.2, 3.6, "⚙️  Orchestration Layer — LangGraph StateGraph (pipeline.py)", C["orch"])
-
-box(ax, 0.6, 14.2, 2.8, 0.65, C["orch"], "Orchestrator", "orchestrator.py  •  backward-compat wrapper")
-box(ax, 3.7, 14.2, 2.8, 0.65, C["orch"], "build_pipeline()", "StateGraph + MemorySaver")
-box(ax, 6.8, 14.2, 3.5, 0.65, C["orch"], "PipelineState TypedDict", "memory/state.py  •  24 typed fields")
-box(ax, 10.6, 14.2, 3.5, 0.65, C["orch"], "Model Presets", "Local  •  Free  •  Balanced  •  Premium")
-box(ax, 14.4, 14.2, 3.0, 0.65, C["preset"], "Balanced (default)",
-    "Gemini Flash → parser/constraint/epic\nClaude Sonnet → story_writer/gap_detector")
-box(ax, 17.7, 14.2, 2.2, 0.65, C["preset"], "Premium", "All Claude Sonnet")
-box(ax, 20.2, 14.2, 1.8, 0.65, C["preset"], "Free", "All Gemini")
-box(ax, 22.3, 14.2, 1.8, 0.65, C["preset"], "Local", "All Ollama")
-
-# LangGraph nodes (linear)
-nodes = [
-    ("1️⃣\ninitialize", "live fetch\naudit setup"),
-    ("2️⃣\nparse", "topics from\ntranscript"),
-    ("3️⃣\nextract_\nconstraints", "rules + limits\nfrom wiki"),
-    ("4️⃣\nwrite_\nstories", "user stories\nAC + priority"),
-    ("5️⃣\ndecompose_\nepics", "group stories\n+ tasks"),
-    ("6️⃣\ndetect_\ngaps", "dupes /\nconflicts / gaps"),
-    ("7️⃣\nfinalize", "guardrails\n+ token tally"),
-]
-nx_start = 0.5
-nw, nh, gap = 3.6, 1.3, 0.15
-for i, (lbl, sub) in enumerate(nodes):
-    nx = nx_start + i * (nw + gap)
-    ny = 11.8
-    box(ax, nx, ny, nw, nh, C["node"], lbl, sub, fontsize=8)
-    if i < len(nodes) - 1:
-        arrow(ax, nx + nw, ny + nh / 2, nx + nw + gap, ny + nh / 2, color=C["node"])
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ROW 3 — Agents
-# ═══════════════════════════════════════════════════════════════════════════
-section_bg(ax, 0.3, 9.0, 27.2, 2.5, "🤖  Agent Layer  (src/agents/)", C["agent"])
-
+# 5 agent nodes
 agents = [
-    ("🔍 Parser Agent", "Extract topics\nraw quotes\nsummary"),
-    ("⚖️ Constraint Agent", "Extract rules\nplatform limits\ncompliance"),
-    ("✍️ Story Writer Agent", "Draft user stories\nGiven/When/Then AC\nrepair + evidence"),
-    ("🏗️ Epic Decomposer", "Group stories\ninto epics\n+ concrete tasks"),
-    ("🔎 Gap Detector", "Duplicates (embed)\nConflicts (LLM)\nCoverage gaps"),
+    (0.148, 0.778, 0.118, 0.048, "① Parser Agent",
+     "gemini-flash / claude-sonnet",  "topics[] + summary", T_ACCENT),
+    (0.148, 0.726, 0.118, 0.048, "② Constraint Agent",
+     "gemini-flash / claude-sonnet",  "constraints[]",      T_ACCENT),
+    (0.310, 0.748, 0.130, 0.048, "③ Story Writer Agent",
+     "claude-sonnet  (reasoning-heavy)", "stories[] + evidence[]", T_AMBER),
+    (0.495, 0.748, 0.130, 0.048, "④ Epic Decomposer",
+     "gemini-flash / claude-sonnet",  "epics[] with tasks[]", T_ACCENT),
+    (0.682, 0.748, 0.148, 0.048, "⑤ Gap Detector Agent",
+     "claude-sonnet  max_tokens=8000 ✓", "duplicates[] conflicts[] gaps[]", T_ROSE),
 ]
-aw = 5.2
-for i, (lbl, sub) in enumerate(agents):
-    ax_ = 0.6 + i * (aw + 0.15)
-    box(ax, ax_, 9.2, aw, 2.0, C["agent"], lbl, sub, fontsize=8.5)
+for x, y, w, h, name, model, out, tc in agents:
+    box(ax, x, y, w, h, C_AGENT, border_color=tc)
+    label(ax, x + w / 2, y + h - 0.010, name,  size=7, color=T_PRIMARY, weight="bold")
+    label(ax, x + w / 2, y + h - 0.023, model, size=5.5, color=T_MUTED)
+    label(ax, x + w / 2, y + 0.008, f"→ {out}", size=5.5, color=tc)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROW 4 — LLM Tools (left)  +  Memory (centre)  +  Integrations (right)
-# ═══════════════════════════════════════════════════════════════════════════
+# join / sequential arrows
+arrow(ax, 0.266, 0.802, 0.310, 0.778, color=ARROW_ALT)
+arrow(ax, 0.266, 0.750, 0.310, 0.768, color=ARROW_ALT)
+arrow(ax, 0.440, 0.772, 0.495, 0.772, color=ARROW)
+arrow(ax, 0.625, 0.772, 0.682, 0.772, color=ARROW)
 
-# LLM Tools
-section_bg(ax, 0.3, 5.8, 8.5, 2.8, "🛠️  LLM Tool Layer  (LangChain-backed)", C["tool"])
-box(ax, 0.6, 7.5, 2.5, 0.95, C["tool"], "🟣 ClaudeTool", "langchain-anthropic\nPrompt caching ✓\nVision (base64) ✓")
-box(ax, 3.4, 7.5, 2.5, 0.95, C["tool"], "🔵 GeminiTool", "langchain-google-genai\nJSON mode\nmax_output_tokens")
-box(ax, 6.2, 7.5, 2.3, 0.95, C["tool"], "🟢 OllamaTool", "langchain-ollama\nLocal / offline\nformat=json")
-box(ax, 0.6, 6.0, 7.9, 1.1, C["tool"],
-    "Common Interface: call(prompt, max_tokens) → (str, usage)  |  call_for_json() → (dict, usage)",
-    "_extract_json_block() — defensive JSON parsing (shared by all three tools)")
+# finalize node
+box(ax, 0.845, 0.750, 0.090, 0.048, C_MEMORY, border_color=T_AMBER)
+label(ax, 0.890, 0.782, "finalize", size=7, color=T_AMBER, weight="bold")
+label(ax, 0.890, 0.768, "guardrails check", size=5.5, color=T_MUTED)
+label(ax, 0.890, 0.756, "audit fingerprint", size=5.5, color=T_MUTED)
+arrow(ax, 0.830, 0.772, 0.845, 0.772, color=ARROW)
 
-# Memory
-section_bg(ax, 9.2, 5.8, 9.8, 2.8, "💾  Memory & State Layer", C["memory"])
-box(ax, 9.5, 7.5, 3.0, 0.95, C["memory"], "🗄️ MemoryStore", "memory/store.py\nKV handoff + vector search\nChromaDB / NPZ / in-process")
-box(ax, 12.8, 7.5, 3.0, 0.95, C["memory"], "📜 AuditLog", "memory/audit_log.py\nSQLite + SHA-256 hash chain\nTamper-evident ✓")
-box(ax, 16.1, 7.5, 2.6, 0.95, C["memory"], "📊 EmbeddingTool", "sentence-transformers\nall-MiniLM-L6-v2\nDuplicate detection (local)")
-box(ax, 9.5, 6.0, 9.2, 1.1, C["memory"],
-    "LangGraph adapter pattern: _hydrate_memory(state) → MemoryStore  →  agent.run()  →  _extract_memory_updates()",
-    "State fields: topics · constraints · stories · epics · gaps · conflicts · duplicates · summary")
+label(ax, 0.5, 0.640,
+      "PipelineState TypedDict — topics | constraints | stories | epics | gaps | conflicts | duplicates | token_usage | stage_errors",
+      size=5.8, color=T_MUTED)
 
-# Integrations
-section_bg(ax, 19.4, 5.8, 8.1, 2.8, "🏢  Enterprise Integrations", C["integ"])
-box(ax, 19.7, 7.5, 2.4, 0.95, C["integ"], "🎫 JiraTool", "REST API\nLive read + publish\nMock fallback")
-box(ax, 22.4, 7.5, 2.4, 0.95, C["integ"], "📖 ConfluenceTool", "REST API\nFetch wiki pages\nMock fallback")
-box(ax, 25.1, 7.5, 2.1, 0.95, C["integ"], "🔗 MCP Server", "mcp-atlassian\nModel Context\nProtocol")
-box(ax, 19.7, 6.0, 7.5, 1.1, C["integ"],
-    "ATLASSIAN_MCP_ENABLED=1 → MCPJiraTool / MCPConfluenceTool",
-    "Live fetch at pipeline start (initialize_node)  •  Gap Detector reads existing tickets")
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROW 3 — Tools · Security · Memory · Observability
+# ═══════════════════════════════════════════════════════════════════════════════
+box(ax, 0.01, 0.415, 0.98, 0.200, PANEL_BG, border_color="#444c56")
+section_header(ax, 0.01, 0.623, 0.98,
+               "TOOLS  ·  SECURITY  ·  MEMORY  ·  OBSERVABILITY", color=T_MUTED)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ROW 5 — Providers (left)  +  Outputs (centre)  +  Eval/Obs (right)
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Providers
-section_bg(ax, 0.3, 2.5, 8.5, 3.0, "☁️  External LLM Providers", C["provider"])
-box(ax, 0.6, 4.5, 2.5, 0.9, C["provider"], "Anthropic Cloud", "claude-sonnet-4-5\nclaude-haiku-4-5\nPrompt caching")
-box(ax, 3.4, 4.5, 2.5, 0.9, C["provider"], "Google AI Studio", "gemini-2.5-flash\ngemini-2.5-pro\nFree tier available")
-box(ax, 6.2, 4.5, 2.3, 0.9, C["provider"], "Ollama (local)", "llama3.2:3b\nmistral / phi3\nNo API cost")
-box(ax, 0.6, 2.7, 7.9, 1.5, C["provider"],
-    "All accessed via LangChain (.bind(max_tokens=N).invoke(messages))\n"
-    "max_retries=3 (rate-limit + connection errors handled automatically)\n"
-    "Usage extracted from AIMessage.response_metadata → audit token tracking")
-
-# Outputs
-section_bg(ax, 9.2, 2.5, 9.8, 3.0, "📤  Synthesis Outputs", C["output"])
-box(ax, 9.5, 4.5, 3.0, 0.9, C["output"], "📦 synthesis.json", "Epics / Stories / Tasks\nGaps / Conflicts\nDuplicates · token_usage")
-box(ax, 12.8, 4.5, 3.0, 0.9, C["output"], "📝 synthesis.md", "Human-readable\nMarkdown report\noutput_formatter.py")
-box(ax, 16.1, 4.5, 2.6, 0.9, C["output"], "🔒 audit_trail.md", "Full reasoning chain\nCompliance record\nSHA-256 hash chain")
-box(ax, 9.5, 2.7, 9.2, 1.5, C["output"],
-    "guardrails.py validates outputs before writing:\n"
-    "story count · AC grammar · topic grounding · tag canonicality · priority rationale\n"
-    "Per-user run history:  logs/runs/<user_id>/  •  outputs/<user_id>/<timestamp>/")
-
-# Eval + Obs
-section_bg(ax, 19.4, 2.5, 8.1, 3.0, "🧪  Evaluation + Observability", C["eval"])
-box(ax, 19.7, 4.5, 3.5, 0.9, C["eval"], "🏆 Golden Dataset", "10 curated cases\nnegative / conflict /\ncompliance scenarios")
-box(ax, 23.5, 4.5, 3.7, 0.9, C["eval"], "📈 Regression Gate", "CI fails if score\ndrops ≥ 0.10\nLLM-as-judge (5 dims)")
-box(ax, 19.7, 2.7, 2.2, 1.5, C["obs"], "📡 OpenTelemetry", "Per-stage spans\nOTEL_ENABLED=1\nOTLP export")
-box(ax, 22.2, 2.7, 2.2, 1.5, C["obs"], "📋 Logger", "logger_setup.py\nRich structured\nconsole output")
-box(ax, 24.7, 2.7, 2.5, 1.5, C["integ"], "External Systems", "Jira Cloud\nConfluence Cloud\natlassian.net")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# VERTICAL ARROWS (layer-to-layer)
-# ═══════════════════════════════════════════════════════════════════════════
-
-# Input → Nodes (to parse node = second node)
-arrow(ax, 2.9, 15.5, 4.1, 13.1, C["input"], "text+images")
-
-# UI → Orchestrator
-arrow(ax, 8.3, 15.5, 2.0, 14.85, C["ui"])
-
-# Orchestrator → Nodes (initialize)
-arrow(ax, 2.0, 14.2, 2.3, 13.1, C["orch"])
-
-# Nodes → Agents (each node drives its agent)
-for i in range(5):
-    nx = 0.5 + (i + 1) * 3.75 + 1.8   # centre of nodes 2-6
-    ax_ = 0.6 + i * 5.35 + 2.6         # centre of agents
-    arrow(ax, nx, 11.8, ax_, 11.2, C["node"])
-
-# Agents → Tools
-for i in range(5):
-    ax_ = 0.6 + i * 5.35 + 2.6
-    arrow(ax, ax_, 9.2, 4.4, 8.75, C["agent"])
-
-# Tools → Providers
-arrow(ax, 1.85, 7.5, 1.85, 5.4, C["tool"])
-arrow(ax, 4.65, 7.5, 4.65, 5.4, C["tool"])
-arrow(ax, 7.35, 7.5, 7.35, 5.4, C["tool"])
-
-# Memory ← Agents
-arrow(ax, 11.3, 9.2, 11.0, 8.75, C["agent"])
-
-# Integrations feed into initialize node
-arrow(ax, 21.5, 8.75, 2.3, 13.1, C["integ"])
-
-# Outputs ← finalize node (node 7, index 6)
-arrow(ax, 25.5, 11.8, 14.0, 5.8, C["output"])
-
-# ═══════════════════════════════════════════════════════════════════════════
-# LEGEND
-# ═══════════════════════════════════════════════════════════════════════════
-legend_items = [
-    (C["ui"],       "User Interface"),
-    (C["auth"],     "Authentication"),
-    (C["input"],    "Input Sources"),
-    (C["orch"],     "Orchestration (LangGraph)"),
-    (C["agent"],    "Agents"),
-    (C["tool"],     "LLM Tools (LangChain)"),
-    (C["memory"],   "Memory / State"),
-    (C["integ"],    "Enterprise Integrations"),
-    (C["output"],   "Outputs"),
-    (C["eval"],     "Evaluation"),
-    (C["obs"],      "Observability"),
-    (C["provider"], "External Providers"),
+# Tools
+box(ax, 0.018, 0.425, 0.295, 0.185, "#0d1117", border_color=BORDER)
+label(ax, 0.165, 0.613, "TOOLS", size=6, color=T_AMBER, weight="bold")
+tools = [
+    ("JiraTool",       "list_all()  ·  publish_synthesis() Epic→Story→Sub-task", T_AMBER),
+    ("ConfluenceTool", "get_page(id) REST  ·  BS4 HTML strip  −60% tokens",      T_AMBER),
+    ("EmbeddingTool",  "all-MiniLM-L6-v2  ·  cosine≥0.6  ·  top-K=5 candidates",T_SILVER),
+    ("ClaudeTool",     "ChatAnthropic  ·  prompt cache ≥4KB  ·  vision support",  T_GREEN),
+    ("GeminiTool",     "ChatGoogleGenerativeAI  ·  GOOGLE_API_KEY  ✓ NEW",        T_AMBER),
+    ("OllamaTool",     "ChatOllama  ·  localhost:11434  ·  zero cost local dev",   T_SILVER),
 ]
-lx, ly = 0.4, 1.9
-for i, (col, lbl) in enumerate(legend_items):
-    row, col_ = divmod(i, 6)
-    bx = lx + col_ * 4.5
-    by = ly - row * 0.5
-    patch = FancyBboxPatch((bx, by - 0.15), 0.3, 0.3,
-                           boxstyle="round,pad=0.02,rounding_size=0.05",
-                           facecolor=col + "55", edgecolor=col, linewidth=1)
-    ax.add_patch(patch)
-    ax.text(bx + 0.45, by, lbl, va="center", fontsize=7.5, color=C["subtext"])
+for i, (name, desc, col) in enumerate(tools):
+    yi = 0.597 - i * 0.028
+    box(ax, 0.025, yi - 0.020, 0.281, 0.024, C_TOOL)
+    label(ax, 0.035, yi - 0.007, name, size=6, color=col, weight="bold", ha="left")
+    label(ax, 0.130, yi - 0.007, desc, size=5.2, color=T_MUTED, ha="left")
 
-ax.text(0.4, 0.6,
-    "Data Flow:  Transcript + Wiki + Backlog → input_loader.py → Orchestrator.run() → "
-    "LangGraph.invoke(PipelineState) → 7 nodes (sequential) → guardrails → synthesis.json / .md / audit_trail.md",
-    fontsize=7.5, color=C["subtext"], alpha=0.85)
-ax.text(0.4, 0.25,
-    "Each node: _hydrate_memory(state) → AgentX(tool, memory, audit).run() → _extract_memory_updates(mem) → state update",
-    fontsize=7.5, color=C["subtext"], alpha=0.85)
+# Security
+box(ax, 0.325, 0.425, 0.250, 0.185, "#0d1117", border_color=BORDER)
+label(ax, 0.450, 0.613, "SECURITY", size=6, color=T_ROSE, weight="bold")
+security = [
+    ("InputSanitizer",   "8 injection patterns  ·  replace → [INJECTION REDACTED]"),
+    ("OutputScanner",    "PII  ·  toxicity  ·  demographic bias"),
+    ("Guardrails",       ">40% High priority  ·  missing ACs  ·  duplicate titles"),
+    ("HMAC State ✓ NEW", "token=raw.ts.HMAC(CLIENT_SECRET)  stateless CSRF"),
+    ("JWT RS256",        "PyJWKClient JWKS verify  ·  1h cache  ·  valid_issuers"),
+    ("Budget Store",     "try_reserve()  ·  settle_reservation()  ·  daily cap USD"),
+]
+for i, (name, desc) in enumerate(security):
+    yi = 0.597 - i * 0.028
+    box(ax, 0.332, yi - 0.020, 0.236, 0.024, C_SECURITY)
+    col = T_GREEN if "NEW" in name else T_ROSE
+    label(ax, 0.342, yi - 0.007, name, size=6, color=col, weight="bold", ha="left")
+    label(ax, 0.342, yi - 0.017, desc, size=5.2, color=T_MUTED, ha="left")
 
-plt.tight_layout(pad=0.5)
-out = "architecture_diagram.png"
-plt.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-print(f"Saved: {out}")
-plt.close()
+# Memory / Audit / Observability
+box(ax, 0.588, 0.425, 0.395, 0.185, "#0d1117", border_color=BORDER)
+label(ax, 0.785, 0.613, "MEMORY  ·  AUDIT  ·  OBSERVABILITY", size=6, color=T_AMBER, weight="bold")
+memory = [
+    ("MemoryStore KV",    "put()/get() explicit agent handoff  ·  per-run isolated",       C_MEMORY, T_AMBER),
+    ("MemoryStore Vector","in-process numpy | NPZ file | ChromaDB (USE_CHROMADB=1)",       C_MEMORY, T_AMBER),
+    ("AuditLog",          "chain-fingerprint SHA-256  ·  every LLM call  ·  collapsible", C_MEMORY, T_AMBER),
+    ("Prometheus :9090",  "synthesis_start/end  ·  token gauges  ·  cost_usd counter",    C_INFRA,  T_GREEN),
+    ("OpenTelemetry",     "pipeline.run  ·  node spans  ·  llm.call spans  ·  OTLP",      C_INFRA,  T_GREEN),
+    ("Run History",       "RUNS_DIR/.runs/<user>/<ts>.json  ·  filter by date/model",     C_MEMORY, T_SILVER),
+]
+for i, (name, desc, col, tc) in enumerate(memory):
+    yi = 0.597 - i * 0.028
+    box(ax, 0.595, yi - 0.020, 0.381, 0.024, col)
+    label(ax, 0.605, yi - 0.007, name, size=6, color=tc, weight="bold", ha="left")
+    label(ax, 0.730, yi - 0.007, desc, size=5.2, color=T_MUTED, ha="left")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROW 4 — Azure Deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+box(ax, 0.01, 0.195, 0.98, 0.205, PANEL_BG, border_color="#444c56")
+section_header(ax, 0.01, 0.408, 0.98,
+               "AZURE DEPLOYMENT  ·  GitHub Actions CI/CD  ·  rg-meridian-motors / eastus",
+               color=T_GREEN)
+
+# CI/CD jobs
+box(ax, 0.018, 0.205, 0.320, 0.192, "#0d1117", border_color=BORDER)
+label(ax, 0.178, 0.400, "GITHUB ACTIONS  ·  infra-and-deploy.yml", size=6, color=T_GREEN, weight="bold")
+jobs = [
+    ("provision",          "az group/acr/cae/containerapp create — idempotent  ·  set -euo pipefail", T_GREEN),
+    ("build",              "docker/build-push-action@v6  ·  :sha + :latest  ·  GHA layer cache",      T_ACCENT),
+    ("deploy-staging",     "secret set  ·  registry set  ·  containerapp update",                     T_AMBER),
+    ("  ENTRA_REDIRECT_URI","→ read Azure FQDN dynamically  (NEW)",                                   T_VIOLET),
+    ("  GOOGLE_API_KEY",   "secretref:google-api-key  (NEW)",                                         T_AMBER),
+    ("  ANTHROPIC_API_KEY","secretref:anthropic-api-key",                                              T_GREEN),
+    ("  health check",     "/_stcore/health  ·  24×10s  ·  4min timeout",                            T_MUTED),
+    ("deploy-production",  "environment: azure-production  ·  manual approval  ·  --revision-suffix", T_ROSE),
+]
+for i, (name, desc, col) in enumerate(jobs):
+    yi = 0.385 - i * 0.023
+    indented = name.startswith("  ")
+    box(ax, 0.025, yi - 0.016, 0.305, 0.020, C_INFRA if not indented else "#0d1117",
+        border_color=col if not indented else "#333")
+    label(ax, 0.035 + (0.02 if indented else 0), yi - 0.006,
+          name.strip(), size=6, color=col, weight="bold", ha="left")
+    label(ax, 0.135, yi - 0.006, desc, size=5.2, color=T_MUTED, ha="left")
+
+# Azure resources
+box(ax, 0.352, 0.205, 0.330, 0.192, "#0d1117", border_color=BORDER)
+label(ax, 0.517, 0.400, "AZURE RESOURCES", size=6, color=T_GREEN, weight="bold")
+resources = [
+    ("meridianmotorsacr0452.azurecr.io", "Container Registry  ·  Basic SKU  ·  admin enabled",       T_SILVER),
+    ("cae-meridian-motors",              "Container Apps Environment  ·  eastus",                    T_GREEN),
+    ("backlog-synthesizer-staging",      "min=0 max=1  ·  scale-to-zero  ·  port 8502",             T_AMBER),
+    ("backlog-synthesizer-prod",         "min=1 max=3  ·  --revision-suffix rollback",               T_GREEN),
+    ("sp-backlog-synthesizer-github",    "Contributor@subscription  ·  AcrPush role",                T_MUTED),
+    ("rg-tfstate / meridianmotorstfstate","Terraform state backend  ·  azurerm ~3.110",              T_MUTED),
+]
+for i, (name, desc, col) in enumerate(resources):
+    yi = 0.385 - i * 0.028
+    box(ax, 0.359, yi - 0.020, 0.316, 0.025, C_INFRA)
+    label(ax, 0.369, yi - 0.007, name, size=5.8, color=col, weight="bold", ha="left")
+    label(ax, 0.369, yi - 0.017, desc, size=5.2, color=T_MUTED, ha="left")
+
+# Secrets
+box(ax, 0.696, 0.205, 0.285, 0.192, "#0d1117", border_color=BORDER)
+label(ax, 0.838, 0.400, "SECRETS & ENV", size=6, color=T_ROSE, weight="bold")
+secrets_list = [
+    ("AZURE_CREDENTIALS",   "SPN JSON  ·  GitHub secret",                   T_MUTED),
+    ("ANTHROPIC_API_KEY",   "sk-ant-...  ·  GitHub + container secret",     T_GREEN),
+    ("GOOGLE_API_KEY",      "AIza...  ·  GitHub + container secret  ✓ NEW", T_AMBER),
+    ("JIRA_API_TOKEN",      "Atlassian PAT  ·  GitHub + container",         T_MUTED),
+    ("ENTRA_CLIENT_SECRET", "app reg secret  ·  GitHub + container",        T_VIOLET),
+    ("ENTRA_REDIRECT_URI",  "set from Azure FQDN at deploy time  ✓ NEW",    T_VIOLET),
+    ("CLIENT_NAME",         "Meridian Motors  ·  plain env var",            T_SILVER),
+]
+for i, (name, desc, col) in enumerate(secrets_list):
+    yi = 0.385 - i * 0.025
+    label(ax, 0.703, yi,        name, size=5.8, color=col, weight="bold", ha="left")
+    label(ax, 0.703, yi - 0.011, desc, size=5.2, color=T_MUTED, ha="left")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROW 5 — Output + Docker + Model Presets
+# ═══════════════════════════════════════════════════════════════════════════════
+box(ax, 0.01, 0.040, 0.98, 0.140, PANEL_BG, border_color="#444c56")
+section_header(ax, 0.01, 0.186, 0.98, "OUTPUT  ·  DOCKER  ·  MODEL PRESETS", color=T_MUTED)
+
+# Output
+box(ax, 0.018, 0.050, 0.275, 0.128, "#0d1117", border_color=BORDER)
+label(ax, 0.155, 0.180, "PIPELINE OUTPUT", size=6, color=T_ACCENT, weight="bold")
+for i, o in enumerate([
+    "epics[] + stories[] + tasks[]  (nested hierarchy)",
+    "gaps[]  ·  conflicts[]  ·  duplicates[]",
+    "synthesis.json  ·  synthesis.md",
+    "audit_trail.md  ·  chain fingerprint",
+    "Jira push: Epic → Story → Sub-task",
+    "Prometheus metrics  ·  OTLP spans",
+]):
+    label(ax, 0.025, 0.165 - i * 0.019, o, size=5.8, color=T_MUTED, ha="left")
+
+# Docker
+box(ax, 0.306, 0.050, 0.285, 0.128, "#0d1117", border_color=BORDER)
+label(ax, 0.448, 0.180, "DOCKER  ·  Multi-Stage Build", size=6, color=T_AMBER, weight="bold")
+for i, d in enumerate([
+    "Stage 1 builder: python:3.13-slim + build-essential → wheels",
+    "Stage 2 runtime: packages only  ·  −200MB  ·  UID 1000 non-root",
+    "warmup.py: bakes all-MiniLM-L6-v2 into image layer (no cold-start)",
+    "libgomp1: OpenMP for numpy/sentence-transformers on slim",
+    "HEALTHCHECK: /_stcore/health  30s interval  60s start-period",
+    "STOPSIGNAL SIGTERM  ·  ENTRYPOINT /app/entrypoint.sh",
+]):
+    label(ax, 0.313, 0.165 - i * 0.019, d, size=5.8, color=T_MUTED, ha="left")
+
+# Model Presets
+box(ax, 0.604, 0.050, 0.385, 0.128, "#0d1117", border_color=BORDER)
+label(ax, 0.796, 0.180, "MODEL PRESETS  ·  per-stage override via advanced sidebar", size=6, color=T_GREEN, weight="bold")
+col_x = [0.612, 0.660, 0.728, 0.806, 0.895]
+col_h = ["Preset", "Parse", "Constraint", "Stories + Gap", "Epic"]
+col_colors = [T_PRIMARY, T_ACCENT, T_ACCENT, T_AMBER, T_ACCENT]
+for j, (h, cx, cc) in enumerate(zip(col_h, col_x, col_colors)):
+    label(ax, cx, 0.163, h, size=5.8, color=cc, weight="bold", ha="left")
+presets = [
+    ("Local",    "ollama/llama3.2", "ollama/llama3.2", "gemini-flash",    "ollama/llama3.2", T_SILVER),
+    ("Free",     "gemini-flash",    "gemini-flash",    "gemini-flash",    "gemini-flash",    T_GREEN),
+    ("Balanced", "gemini-flash",    "gemini-flash",    "claude-sonnet",   "gemini-flash",    T_AMBER),
+    ("Premium",  "claude-sonnet",   "claude-sonnet",   "claude-sonnet",   "claude-sonnet",   T_ROSE),
+]
+for i, (preset, p, c, s, e, pc) in enumerate(presets):
+    yi = 0.150 - i * 0.022
+    for j, (cell, cx) in enumerate(zip([preset, p, c, s, e], col_x)):
+        label(ax, cx, yi, cell, size=5.5,
+              color=pc if j == 0 else T_MUTED, ha="left",
+              weight="bold" if j == 0 else "normal")
+
+# ── Legend ────────────────────────────────────────────────────────────────────
+legend = [
+    (C_AGENT, T_ACCENT, "LangGraph Agent"),
+    (C_TOOL,  T_AMBER,  "Deterministic Tool"),
+    (C_SECURITY, T_ROSE, "Security / Guard"),
+    (C_INFRA, T_GREEN,  "Azure Infra"),
+    (C_AUTH,  T_VIOLET, "Auth / OAuth2"),
+    (C_LLM,   T_GREEN,  "LLM Provider"),
+    (C_MEMORY,T_AMBER,  "Memory / Audit"),
+]
+lx = 0.015
+for col, tc, lbl in legend:
+    box(ax, lx, 0.010, 0.011, 0.018, col)
+    label(ax, lx + 0.016, 0.019, lbl, size=5.5, color=tc, ha="left")
+    lx += 0.128
+
+ax.text(0.5, 0.002,
+        "Changes in this version:  "
+        "✓ HMAC-signed OAuth state tokens (stateless CSRF, survives scale-to-zero)  ·  "
+        "✓ ENTRA_REDIRECT_URI set dynamically from Azure FQDN  ·  "
+        "✓ GOOGLE_API_KEY injected as container secret  ·  "
+        "✓ Gap Detector max_tokens 4000 → 8000",
+        fontsize=5.2, color=T_GREEN, ha="center", va="bottom", style="italic")
+
+plt.tight_layout(pad=0.2)
+plt.savefig("architecture_diagram.png", dpi=180, bbox_inches="tight",
+            facecolor=BG, edgecolor="none")
+print("✅ architecture_diagram.png written")
