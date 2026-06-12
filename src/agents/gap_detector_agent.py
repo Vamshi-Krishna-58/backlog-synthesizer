@@ -166,7 +166,7 @@ class GapDetectorAgent(Agent):
         )
 
         try:
-            parsed, usage = self.claude.call_for_json(prompt, max_tokens=4000)
+            parsed, usage = self.claude.call_for_json(prompt, max_tokens=8000)
         except ToolError as e:
             raise AgentError(f"Gap Detector LLM call failed: {e}") from e
 
@@ -193,7 +193,7 @@ class GapDetectorAgent(Agent):
         self.audit.record_tool_call(
             agent=self.name,
             tool=getattr(self.claude, "name", "claude"),
-            request={"prompt_chars": len(prompt), "max_tokens": 4000},
+            request={"prompt_chars": len(prompt), "max_tokens": 8000},
             response_excerpt=str(parsed)[:300],
             tokens_used=(usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0),
             usage=usage,

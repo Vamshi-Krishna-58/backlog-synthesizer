@@ -72,6 +72,7 @@ Reply with a single JSON object of this exact shape:
 14. Candidate tickets are provided as context to help judge whether something is already covered in the backlog. Do not produce duplicates in this output — duplicate detection is handled elsewhere.
 15. If the evidence is weak or ambiguous, prefer not to flag a conflict or gap. Empty `conflicts` and empty `gaps` lists are valid and expected when nothing qualifies.
 16. Return valid JSON only. Do not include markdown fences, commentary, or preamble.
+17. Keep all string values concise — `reason` and `evidence` must be one sentence each; `description` must be at most two sentences. Never exceed these limits.
 
 # Worked example (illustrative — do not copy its content)
 
