@@ -23049,3 +23049,7 @@ ModuleNotFoundError: No module named 'torchvision'
 11:54:33 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2 "HTTP/1.1 200 OK"
 11:54:34 [INFO] memory.store: Embedding model loaded
 11:54:34 [INFO] memory.store: Embedding model loaded
+  Stopping...
+2026-06-11 14:48:29.967 Shutting down
+2026-06-11 14:48:30.079 Waiting for application shutdown.
+2026-06-11 14:48:30.080 Application shutdown complete.

@@ -2,11 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(./venv/bin/python -c \"import ast; ast.parse\\(open\\('app.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(ls -la /Users/mani.kantan.arun/.claude/projects/ 2>/dev/null)",
-      "Read(//Users/mani.kantan.arun/.claude/projects/**)",
+      "Bash(ls -la /Users/v.vamshi.krishna.s/.claude/projects/ 2>/dev/null)",
+      "Read(//Users/v.vamshi.krishna.s/.claude/projects/**)",
       "Bash(python3 -c ' *)",
       "Bash(rsync -a --exclude='venv' --exclude='outputs' --exclude='logs' --exclude='__pycache__' --exclude='.env' --exclude='versions' --exclude='*.pyc' --exclude='evaluation' --exclude='.DS_Store' ./ versions/v1_baseline/)",
-      "Bash(/Users/mani.kantan.arun/Downloads/backlog-synthesizer/venv/bin/python -c \"import streamlit; print\\(streamlit.__version__\\)\")",
+      "Bash(/Users/v.vamshi.krishna.s/Downloads/backlog-synthesizer/venv/bin/python -c \"import streamlit; print\\(streamlit.__version__\\)\")",
       "Bash(venv/bin/python -c ' *)",
       "Bash(nohup ./venv/bin/streamlit run app.py --server.headless true --server.port 8599)",
       "Bash(kill 3593)",
@@ -27,8 +27,8 @@
       "Bash(venv/bin/python -c \"import sys; sys.path.insert\\(0,'src'\\); from ui.styling import get_css; assert 'white-space: nowrap' in get_css\\(\\); print\\('styling.py: nowrap rule present'\\)\")",
       "Bash(python -m py_compile src/tools/confluence_tool.py src/memory/store.py src/redactor.py src/orchestrator.py src/agents/story_writer_agent.py evaluation/llm_as_judge.py evaluation/run_evaluation.py evaluation/dashboard.py evaluation/ab_compare.py)",
       "Bash(python -m py_compile app.py)",
-      "Bash(find /Users/mani.kantan.arun -maxdepth 4 -type d -iname \"*smart*backlog*\" 2>/dev/null; find /Users/mani.kantan.arun/Downloads -maxdepth 3 -type d -iname \"*UI*\" 2>/dev/null)",
-      "Read(//Users/mani.kantan.arun/**)"
+      "Bash(find /Users/user -maxdepth 4 -type d -iname \"*smart*backlog*\" 2>/dev/null; find /Users/v.vamshi.krishna.s/Downloads -maxdepth 3 -type d -iname \"*UI*\" 2>/dev/null)",
+      "Read(//Users/v.vamshi.krishna.s/**)"
     ]
   }
 }
