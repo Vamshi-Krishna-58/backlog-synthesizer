@@ -72,7 +72,10 @@ jobs:
     name: Docker build verification
     runs-on: ubuntu-latest
     needs: [unit-tests]
-    timeout-minutes: 15
+    # A cold build (cache miss) compiles/installs the full deps incl. the CPU
+    # torch wheel, which can exceed 15 min and was getting cancelled. Warm builds
+    # (GHA layer cache hit) finish in a couple of minutes; 25 covers a cold build.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
