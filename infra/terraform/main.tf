@@ -46,6 +46,14 @@ resource "azurerm_role_assignment" "acr_push" {
   principal_id         = var.spn_object_id
 }
 
+# Allow the staging app's managed identity to PULL images from ACR (so the
+# container app authenticates to the registry via identity, not a password).
+resource "azurerm_role_assignment" "staging_acr_pull" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_container_app.staging.identity[0].principal_id
+}
+
 # ── Storage Account (persistent logs & outputs) ───────────────────────────────
 resource "azurerm_storage_account" "main" {
   name                     = var.storage_account_name
@@ -140,15 +148,9 @@ resource "azurerm_container_app" "staging" {
     type = "SystemAssigned"
   }
 
-  # acr-password is a plain secret (registry pull credential, not in Key Vault).
-  secret {
-    name  = "acr-password"
-    value = azurerm_container_registry.main.admin_password
-  }
-
   # App secrets are Key Vault REFERENCES — the value lives only in Key Vault and
   # is fetched at runtime via the system-assigned identity. No plaintext secret
-  # is ever stored on the container app.
+  # is ever stored on the container app (ACR auth uses the identity too — below).
   dynamic "secret" {
     for_each = azurerm_key_vault_secret.app
     content {
@@ -158,10 +160,11 @@ resource "azurerm_container_app" "staging" {
     }
   }
 
+  # ACR pull authenticated via the app's managed identity (AcrPull role granted
+  # below) — no registry username/password is stored anywhere.
   registry {
-    server               = azurerm_container_registry.main.login_server
-    username             = azurerm_container_registry.main.admin_username
-    password_secret_name = "acr-password"
+    server   = azurerm_container_registry.main.login_server
+    identity = "System"
   }
 
   ingress {

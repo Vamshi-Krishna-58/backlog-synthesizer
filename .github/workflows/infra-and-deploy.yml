@@ -253,35 +253,39 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set -euo pipefail
-          ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
 
-          # Ensure the app has a system-assigned identity with read access to the
-          # Key Vault, so the keyvaultref secrets below resolve at runtime.
+          # Ensure the app has a system-assigned identity. It is used both to read
+          # secrets from Key Vault AND to authenticate the ACR image pull — so no
+          # plaintext secret or registry password is stored on the container app.
           PID=$(az containerapp identity assign \
             --name "$STAGING_APP" --resource-group "$RG" \
             --system-assigned --query principalId -o tsv)
+
+          # Grant the identity read on Key Vault and pull on ACR.
           az keyvault set-policy --name "$KV_NAME" \
             --object-id "$PID" --secret-permissions get list --output none
+          ACR_ID=$(az acr show --name "$ACR" --resource-group "$RG" --query id -o tsv)
+          az role assignment create --assignee-object-id "$PID" \
+            --assignee-principal-type ServicePrincipal \
+            --role AcrPull --scope "$ACR_ID" --output none 2>/dev/null || true
 
           # App secrets are Key Vault references (value lives ONLY in Key Vault,
-          # pulled via the managed identity). Only acr-password is a plain secret.
+          # fetched via the managed identity). No plaintext secrets on the app.
           KV_BASE="https://$KV_NAME.vault.azure.net/secrets"
           az containerapp secret set \
             --name "$STAGING_APP" --resource-group "$RG" \
             --secrets \
-              "acr-password=$ACR_PASS" \
               "anthropic-api-key=keyvaultref:$KV_BASE/anthropic-api-key,identityref:system" \
               "google-api-key=keyvaultref:$KV_BASE/google-api-key,identityref:system" \
               "jira-api-token=keyvaultref:$KV_BASE/jira-api-token,identityref:system" \
               "entra-client-secret=keyvaultref:$KV_BASE/entra-client-secret,identityref:system" \
             --output none
 
-          # Register ACR as a pull registry (separate command from update)
+          # Authenticate the ACR pull via the managed identity (no password).
           az containerapp registry set \
             --name "$STAGING_APP" --resource-group "$RG" \
             --server "$ACR_SERVER" \
-            --username "$ACR" \
-            --password "$ACR_PASS" \
+            --identity system \
             --output none
 
       - name: Deploy image
