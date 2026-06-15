@@ -216,7 +216,6 @@ flowchart TB
         direction LR
         CI["🧪 ci.yml\nruff · pytest · bandit\npip-audit · TruffleHog\nDocker build verify\neval suite (gated)"]:::cicd
         CD_AZ["🔵 cd-azure.yml\nBuild → ACR\nstaging → smoke test\n(FQDN re-fetched in job)\ncanary 10% → verify\n→ promote 100%\nenv dropdown"]:::cicd
-        CD_AWS["🟠 cd-aws.yml\nBuild → ECR\nstaging → smoke test\nECS rolling deploy\ncircuit breaker\nmanual dispatch only"]:::cicd
         SECRET_ROT["🔑 secret-rotation-check.yml\nWeekly Monday 08:00 UTC\nAPI key liveness check\nKey Vault expiry (14d)\nSlack/Teams alert\nAuto GitHub issue"]:::cicd
     end
 
@@ -309,7 +308,7 @@ flowchart TB
     METRICS & JUDGE --> DASH
 
     %% CI/CD
-    CI -->|"gates deploy"| CD_AZ & CD_AWS
+    CI -->|"gates deploy"| CD_AZ
     SECRET_ROT -.->|"weekly check"| CLAUDE_API & GEMINI_API
 ```
 
@@ -335,7 +334,7 @@ flowchart TB
 | **Observability** | `src/telemetry.py`, `src/metrics.py`, `src/logger_setup.py` | OTel per-node spans + root span, Prometheus metrics (port 9090), structured logs |
 | **Evaluation** | `evaluation/*.py` + `golden_dataset/` | 10 golden cases, 8 deterministic metrics (incl. conflict precision + F1), LLM-as-judge, regression dashboard |
 | **Tests** | `tests/` | Unit, load/soak (circuit breaker + atomic budget), security, vision |
-| **CI/CD** | `.github/workflows/` | Lint + test + security scan, Azure/AWS deploy with env dropdown, weekly secret rotation |
+| **CI/CD** | `.github/workflows/` | Lint + test + security scan, Azure deploy with env dropdown, weekly secret rotation |
 
 ---
 
@@ -424,8 +423,6 @@ Manual: workflow_dispatch with environment dropdown
     cd-azure.yml  →  staging | production | staging → production
                      smoke test re-fetches FQDN via Azure login (avoids
                      GitHub Actions secret-masking output suppression)
-    cd-aws.yml    →  manual dispatch only (no push trigger)
-                     staging | production | staging → production
 
 Weekly (Monday 08:00 UTC):
     secret-rotation-check.yml

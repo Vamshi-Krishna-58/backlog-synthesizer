@@ -25,6 +25,10 @@ env:
   STAGING_APP: backlog-synthesizer-staging
   PROD_APP:    backlog-synthesizer-prod
   LOCATION:    eastus
+  # Staging app secrets are stored in Azure Key Vault and pulled via the app's
+  # system-assigned managed identity (keyvaultref). The GitHub Actions secrets
+  # are no longer written into the container app for staging.
+  KV_NAME:     kv-backlog-stg25296
 
 jobs:
   # ── 1. Provision infra (az CLI, idempotent) ────────────────────────────────
@@ -251,15 +255,25 @@ jobs:
           set -euo pipefail
           ACR_PASS=$(az acr credential show --name "$ACR" --query passwords[0].value -o tsv)
 
-          # Set all secrets in one call
+          # Ensure the app has a system-assigned identity with read access to the
+          # Key Vault, so the keyvaultref secrets below resolve at runtime.
+          PID=$(az containerapp identity assign \
+            --name "$STAGING_APP" --resource-group "$RG" \
+            --system-assigned --query principalId -o tsv)
+          az keyvault set-policy --name "$KV_NAME" \
+            --object-id "$PID" --secret-permissions get list --output none
+
+          # App secrets are Key Vault references (value lives ONLY in Key Vault,
+          # pulled via the managed identity). Only acr-password is a plain secret.
+          KV_BASE="https://$KV_NAME.vault.azure.net/secrets"
           az containerapp secret set \
             --name "$STAGING_APP" --resource-group "$RG" \
             --secrets \
               "acr-password=$ACR_PASS" \
-              "anthropic-api-key=${{ secrets.ANTHROPIC_API_KEY }}" \
-              "google-api-key=${{ secrets.GOOGLE_API_KEY }}" \
-              "jira-api-token=${{ secrets.JIRA_API_TOKEN }}" \
-              "entra-client-secret=${{ secrets.ENTRA_CLIENT_SECRET }}" \
+              "anthropic-api-key=keyvaultref:$KV_BASE/anthropic-api-key,identityref:system" \
+              "google-api-key=keyvaultref:$KV_BASE/google-api-key,identityref:system" \
+              "jira-api-token=keyvaultref:$KV_BASE/jira-api-token,identityref:system" \
+              "entra-client-secret=keyvaultref:$KV_BASE/entra-client-secret,identityref:system" \
             --output none
 
           # Register ACR as a pull registry (separate command from update)

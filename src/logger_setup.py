@@ -6,7 +6,7 @@ LOG_LEVEL   INFO (default) | DEBUG | WARNING | ERROR
 LOG_FORMAT  text (default) | json
 
 Set LOG_FORMAT=json in production containers so logs are structured
-and queryable in Azure Monitor / CloudWatch Logs Insights / Datadog.
+and queryable in Azure Monitor / Log Analytics / Datadog.
 
 JSON output fields
 ------------------
@@ -21,10 +21,8 @@ Log shipping (no code changes needed — infrastructure only)
   Azure Container Apps  — logs stream to the Log Analytics workspace
       attached to the Container Apps Environment (set in azure_setup.sh).
       Query with: az containerapp logs show ... or Log Analytics KQL.
-
-  AWS ECS / Fargate  — awslogs driver in the task definition ships all
-      stderr output to CloudWatch Logs (/ecs/backlog-synthesizer).
-      Query with CloudWatch Logs Insights.
+      With LOGS_DIR set, logs are also written to ${LOGS_DIR}/app.log on the
+      mounted Azure Files share so they persist across restarts/scale-to-zero.
 
   Datadog  — set DD_AGENT_HOST + DD_SERVICE env vars and add the
       datadog-agent sidecar; structured JSON lines are auto-parsed.

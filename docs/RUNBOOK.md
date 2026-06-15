@@ -81,7 +81,7 @@
 
 **Response:**
 1. Check container logs for the missing variable name.
-2. Set the missing secret in the platform secrets manager (Azure Key Vault / AWS Secrets Manager).
+2. Set the missing secret in the platform secrets manager (Azure Key Vault / Container Apps secrets).
 3. Redeploy or restart — the startup check runs at boot and will pass once the var is present.
 4. **Never** commit secrets to `.env` in the repo. Use `.env.example` as the template for local dev.
 
@@ -123,17 +123,6 @@ az containerapp ingress traffic set \
   --revision-weight <previous-revision-name>=100
 ```
 
-**AWS ECS:**
-```bash
-# List recent task definitions
-aws ecs list-task-definitions --family-prefix backlog-synthesizer --sort DESC
-
-# Update service to previous task definition
-aws ecs update-service \
-  --cluster <cluster> --service backlog-synthesizer \
-  --task-definition backlog-synthesizer:<previous-revision-number>
-```
-
 ---
 
 ## 4. Key rotation
@@ -163,7 +152,7 @@ Trigger manually after any suspected credential leak:
 | `JIRA_API_TOKEN` | 90 days | Track in your secrets manager |
 | `PAGERDUTY_ROUTING_KEY` | 365 days | Track in PagerDuty console |
 
-> Tip: set an expiry date on each secret in Azure Key Vault / AWS Secrets Manager. The weekly CI job will warn 14 days before expiry.
+> Tip: set an expiry date on each secret in Azure Key Vault. The weekly CI job will warn 14 days before expiry.
 
 ---
 
@@ -178,7 +167,7 @@ Trigger manually after any suspected credential leak:
 | `JIRA_API_TOKEN` | Revoke at id.atlassian.com → generate new → update secret → restart → confirm |
 
 **Zero-downtime rotation for `ANTHROPIC_API_KEY`:**  
-Set the new key in your secrets manager first. Then do a rolling restart (Container Apps revision or ECS rolling deploy) — old pods use the old key until they are replaced; new pods pick up the new key from the environment at startup. There is no window where both keys need to be valid simultaneously.
+Set the new key in your secrets manager first. Then do a rolling restart (Container Apps revision) — old pods use the old key until they are replaced; new pods pick up the new key from the environment at startup. There is no window where both keys need to be valid simultaneously.
 
 ---
 

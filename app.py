@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
 # .env is for local development only. In production, set env vars via the
-# deployment platform (Fly.io secrets, AWS Secrets Manager, etc.).
+# deployment platform (Azure Container Apps secrets / Azure Key Vault).
 load_dotenv(ROOT / ".env")
 
 # Configurable client / org name shown on the login page and in the UI.
