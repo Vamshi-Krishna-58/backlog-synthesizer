@@ -49,7 +49,6 @@ from agents.base import AgentError
 from tools.base import Tool, ToolError
 from tools.claude_tool import ClaudeTool
 from tools.gemini_tool import GeminiTool
-from tools.ollama_tool import OllamaTool
 from tools.jira_tool import JiraTool
 from tools.confluence_tool import ConfluenceTool
 
@@ -148,10 +147,8 @@ def _get_tool(stage_name: str, state: PipelineState, config: RunnableConfig) -> 
         return ClaudeTool(model=model_id)
     if mid.startswith("gemini"):
         return GeminiTool(model=model_id)
-    if mid.startswith("ollama"):
-        return OllamaTool(model=model_id)
     raise ToolError(
-        f"Unknown model id '{model_id}'. Expected prefix 'claude-', 'gemini-', or 'ollama/'."
+        f"Unknown model id '{model_id}'. Expected prefix 'claude-' or 'gemini-'."
     )
 
 

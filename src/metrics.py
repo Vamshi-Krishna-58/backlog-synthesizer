@@ -105,7 +105,7 @@ if _AVAILABLE:
         Counter,
         "backlog_llm_errors_total",
         "LLM API errors by provider",
-        ["provider"],             # anthropic | google | ollama | unknown
+        ["provider"],             # anthropic | google | unknown
     )
     ACTIVE_SYNTHESIS = _get_or_create(
         Gauge,

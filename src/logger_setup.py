@@ -35,8 +35,17 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 _CONFIGURED = False
+
+# Persist diagnostic logs to a file in addition to stderr when LOGS_DIR is set
+# (e.g. on Azure, where LOGS_DIR points at the mounted Azure Files share so the
+# logs survive restarts/scale-to-zero). Disable explicitly with LOG_TO_FILE=0.
+# Rotation keeps the share from filling: 10 MB × 5 files per logger config.
+_LOG_FILE_MAX_BYTES = int(os.environ.get("LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))
+_LOG_FILE_BACKUPS = int(os.environ.get("LOG_FILE_BACKUP_COUNT", "5"))
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -50,8 +59,53 @@ def get_logger(name: str) -> logging.Logger:
         else:
             _configure_text(level)
 
+        _attach_file_handler(level)
+
         _CONFIGURED = True
     return logging.getLogger(name)
+
+
+def _file_handler_path() -> Path | None:
+    """Resolve the log file path, or None if file logging is disabled/unset.
+
+    Honours LOG_FILE (explicit path) first, then LOGS_DIR/app.log. Returns None
+    when LOG_TO_FILE=0 or no destination is configured (e.g. local dev)."""
+    if os.environ.get("LOG_TO_FILE", "1").strip().lower() in ("0", "false", "no"):
+        return None
+    explicit = os.environ.get("LOG_FILE", "").strip()
+    if explicit:
+        return Path(explicit)
+    logs_dir = os.environ.get("LOGS_DIR", "").strip()
+    if logs_dir:
+        return Path(logs_dir) / "app.log"
+    return None
+
+
+def _attach_file_handler(level: int) -> None:
+    """Add a rotating file handler to the root logger when configured.
+
+    Reuses the formatter already installed by _configure_text/_configure_json so
+    the file lines match the console format (text or JSON)."""
+    path = _file_handler_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(
+            path, maxBytes=_LOG_FILE_MAX_BYTES, backupCount=_LOG_FILE_BACKUPS,
+            encoding="utf-8",
+        )
+        fh.setLevel(level)
+        root = logging.getLogger()
+        existing = root.handlers[0].formatter if root.handlers else None
+        if existing is not None:
+            fh.setFormatter(existing)
+        root.addHandler(fh)
+    except OSError as exc:
+        # Never let a bad/unwritable log path crash the app — keep stderr logging.
+        logging.getLogger(__name__).warning(
+            "Could not open log file %s (%s); continuing with stderr only.", path, exc
+        )
 
 
 def _configure_text(level: int) -> None:

@@ -137,7 +137,7 @@ groups:
           description: >
             95th-percentile synthesis duration is
             {{ $value | humanizeDuration }}.
-            Possible causes: slow Ollama local model, Anthropic API throttling,
+            Possible causes: Anthropic or Gemini API throttling,
             or an unusually large input document.
 
       - alert: P95LatencyCritical

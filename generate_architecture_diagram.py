@@ -109,7 +109,6 @@ label(ax, 0.465, 0.864, "JWT RS256 verify via PyJWKClient JWKS  ·  roles → us
 for i, (name, api, note, col) in enumerate([
     ("Claude Sonnet 4.5", "Anthropic API", "prompt cache ≥4KB", T_GREEN),
     ("Gemini 2.5 Flash",  "Google AI API", "GOOGLE_API_KEY ✓ NEW", T_AMBER),
-    ("Ollama llama3.2",   "localhost:11434","zero API cost", T_SILVER),
 ]):
     xi = 0.615 + i * 0.122
     box(ax, xi, 0.852, 0.115, 0.075, C_LLM)
@@ -192,7 +191,6 @@ tools = [
     ("EmbeddingTool",  "all-MiniLM-L6-v2  ·  cosine≥0.6  ·  top-K=5 candidates",T_SILVER),
     ("ClaudeTool",     "ChatAnthropic  ·  prompt cache ≥4KB  ·  vision support",  T_GREEN),
     ("GeminiTool",     "ChatGoogleGenerativeAI  ·  GOOGLE_API_KEY  ✓ NEW",        T_AMBER),
-    ("OllamaTool",     "ChatOllama  ·  localhost:11434  ·  zero cost local dev",   T_SILVER),
 ]
 for i, (name, desc, col) in enumerate(tools):
     yi = 0.597 - i * 0.028
@@ -340,7 +338,6 @@ col_colors = [T_PRIMARY, T_ACCENT, T_ACCENT, T_AMBER, T_ACCENT]
 for j, (h, cx, cc) in enumerate(zip(col_h, col_x, col_colors)):
     label(ax, cx, 0.163, h, size=5.8, color=cc, weight="bold", ha="left")
 presets = [
-    ("Local",    "ollama/llama3.2", "ollama/llama3.2", "gemini-flash",    "ollama/llama3.2", T_SILVER),
     ("Free",     "gemini-flash",    "gemini-flash",    "gemini-flash",    "gemini-flash",    T_GREEN),
     ("Balanced", "gemini-flash",    "gemini-flash",    "claude-sonnet",   "gemini-flash",    T_AMBER),
     ("Premium",  "claude-sonnet",   "claude-sonnet",   "claude-sonnet",   "claude-sonnet",   T_ROSE),

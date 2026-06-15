@@ -8,8 +8,8 @@ help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install:  ## Install dependencies into the active environment
-	pip install -r requirements.txt
+install:  ## Install pinned dependencies into the active environment (Python 3.13)
+	pip install -r requirements-lock.txt
 
 test:  ## Run the full test suite (mocked, offline, ~1s)
 	python -m pytest tests/ -q

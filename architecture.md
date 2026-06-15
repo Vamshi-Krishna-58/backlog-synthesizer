@@ -120,7 +120,6 @@ flowchart TB
         CB["⚡ Circuit Breaker\ncircuit_breaker.py\nCLOSED/OPEN/HALF_OPEN\nCLAUDE_CB · GEMINI_CB\nthreadsafe probe lock"]:::guard
         CT["🟣 ClaudeTool\nlangchain-anthropic\nPrompt caching\nVision · max_retries=3"]:::tool
         GT["🔵 GeminiTool\nlangchain-google-genai\nJSON mode · max_retries=3"]:::tool
-        OT["🟢 OllamaTool\nlangchain-ollama\nLocal / offline\nformat=json"]:::tool
         ET["📊 EmbeddingTool\nsentence-transformers\nall-MiniLM-L6-v2\nlocal, no LLM cost"]:::tool
     end
 
@@ -129,7 +128,6 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
     subgraph PRESETS["  Model Presets (app.py)  "]
         direction LR
-        P_LOCAL["🏠 Local\nAll Ollama\n~$0/run"]:::preset
         P_FREE["🆓 Free\nAll Gemini Flash\n~$0.01/run"]:::preset
         P_BAL["⚖️ Balanced\nGemini + Claude\n~$0.20/run"]:::preset
         P_PREM["⭐ Premium\nAll Claude Sonnet\n~$0.80/run"]:::preset
@@ -142,7 +140,6 @@ flowchart TB
         direction LR
         CLAUDE_API["☁️ Anthropic\nclaude-sonnet-4-5\nclaude-haiku-4-5"]:::provider
         GEMINI_API["☁️ Google AI\ngemini-2.5-flash\ngemini-2.5-pro"]:::provider
-        OLLAMA_API["💻 Ollama (local)\nllama3.2:3b\nmistral / phi3"]:::provider
     end
 
     %% ─────────────────────────────────────────────────────────────────
@@ -264,13 +261,12 @@ flowchart TB
 
     %% Agents → LLM Tools (via circuit breaker)
     A1 & A2 & A3 & A4 & A5 -->|"tool.call_for_json()"| CB
-    CB -->|"CLOSED / probe"| CT & GT & OT
+    CB -->|"CLOSED / probe"| CT & GT
     A5 -->|"find_duplicates()"| ET
 
     %% LLM Tools → Providers
     CT -->|"max_retries=3"| CLAUDE_API
     GT -->|"max_retries=3"| GEMINI_API
-    OT -->|"format=json"| OLLAMA_API
 
     %% Agents ↔ Memory
     A1 & A2 & A3 & A4 & A5 -->|"memory.put()"| STORE
@@ -330,7 +326,7 @@ flowchart TB
 | **Orchestration** | `src/orchestrator.py`, `src/pipeline.py` | LangGraph StateGraph, root OTel span, backward-compat wrapper |
 | **Pipeline Nodes** | `src/pipeline.py` (`_node_with_span`) | 7 nodes each wrapped with per-node OTel span, output attribute annotations |
 | **Agents** | `src/agents/*.py` (5 files) | Specialized reasoning per stage |
-| **LLM Tools** | `src/tools/claude_tool.py`, `gemini_tool.py`, `ollama_tool.py` | LangChain-backed provider wrappers, max_retries=3 |
+| **LLM Tools** | `src/tools/claude_tool.py`, `gemini_tool.py` | LangChain-backed provider wrappers, max_retries=3 |
 | **Circuit Breaker** | `src/circuit_breaker.py` | CLOSED/OPEN/HALF_OPEN per provider, thread-safe probe exclusivity |
 | **Embedding** | `src/tools/embedding_tool.py` | Local sentence-transformers for duplicate detection (no LLM cost) |
 | **Memory** | `src/memory/store.py`, `audit_log.py`, `state.py` | KV handoff, ChromaDB HA (HttpClient/PersistentClient), tamper-evident audit |

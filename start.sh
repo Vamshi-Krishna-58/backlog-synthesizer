@@ -7,10 +7,9 @@
 #   ./start.sh
 #
 # What it does:
-#   1. Starts Ollama (if installed and not already running)
-#   2. Activates the Python 3.13 venv (has mcp + all deps)
-#   3. Loads .env
-#   4. Starts Streamlit on port 8502
+#   1. Activates the Python 3.13 venv (has mcp + all deps)
+#   2. Loads .env
+#   3. Starts Streamlit on port 8502
 #
 # Press Ctrl+C to stop.
 # =============================================================================
@@ -24,30 +23,7 @@ info() { echo -e "${CYAN}[start]${NC} $*"; }
 ok()   { echo -e "${GREEN}[start]${NC} $*"; }
 warn() { echo -e "${YELLOW}[start]${NC} $*"; }
 
-# ── 1. Ollama ────────────────────────────────────────────────────────────────
-if command -v ollama &>/dev/null; then
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        ok "Ollama already running"
-    else
-        info "Starting Ollama in background…"
-        ollama serve &>/tmp/ollama.log &
-        # Wait up to 10 seconds for it to be ready
-        for i in $(seq 1 20); do
-            if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-                ok "Ollama ready (${i} × 0.5s)"
-                break
-            fi
-            sleep 0.5
-        done
-        if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-            warn "Ollama did not start in time — Local preset may fail. Check /tmp/ollama.log"
-        fi
-    fi
-else
-    warn "Ollama not installed — Local preset unavailable. Install from https://ollama.ai"
-fi
-
-# ── 2. Pick best available venv (highest Python version wins) ───────────────
+# ── 1. Pick best available venv (highest Python version wins) ───────────────
 # requirements.txt uses PEP 508 markers so mcp installs automatically on 3.10+.
 # Priority: venv313 > venv312 > venv311 > venv310 > venv (3.9 fallback)
 VENV=""
@@ -74,7 +50,7 @@ fi
 source "$VENV/bin/activate"
 ok "Activated $VENV"
 
-# ── 3. Load .env ─────────────────────────────────────────────────────────────
+# ── 2. Load .env ─────────────────────────────────────────────────────────────
 if [ -f "$ROOT/.env" ]; then
     set -a
     source "$ROOT/.env"
@@ -84,7 +60,7 @@ else
     warn ".env not found — using system environment variables only"
 fi
 
-# ── 4. Start Streamlit ───────────────────────────────────────────────────────
+# ── 3. Start Streamlit ───────────────────────────────────────────────────────
 PORT="${PORT:-8502}"
 info "Starting Streamlit on http://localhost:${PORT} …"
 echo ""

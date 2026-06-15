@@ -25,7 +25,6 @@ from __future__ import annotations
 
 # Prices are USD per 1 million tokens: {"input": <price>, "output": <price>}
 MODEL_PRICES: dict[str, dict[str, float]] = {
-    "ollama":               {"input": 0.0,   "output": 0.0},
     # Claude
     "claude-sonnet-4-5":   {"input": 3.0,   "output": 15.0},
     "claude-sonnet-4":     {"input": 3.0,   "output": 15.0},
@@ -47,7 +46,6 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
 }
 
 FREE_TIER_MODELS: set[str] = frozenset({
-    "ollama",
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -92,13 +90,4 @@ def estimate_cost_usd(
     return (
         input_tokens  / 1_000_000 * prices["input"]
         + output_tokens / 1_000_000 * prices["output"]
-    )
-
-
-def estimate_total_cost_usd(model: str, totals: dict[str, int]) -> float | None:
-    """Convenience: `totals` like {"input": N, "output": N}."""
-    return estimate_cost_usd(
-        model,
-        input_tokens=totals.get("input", 0),
-        output_tokens=totals.get("output", 0),
     )

@@ -12,7 +12,7 @@ Key behaviours preserved from the original implementation:
   - Retry: ``max_retries`` is wired directly into ``ChatAnthropic`` — the
     SDK retries on ``RateLimitError`` and connection errors automatically.
   - JSON extraction: the same defensive ``_extract_json_block`` logic,
-    shared by GeminiTool and OllamaTool.
+    shared by GeminiTool.
   - Token usage: extracted from ``AIMessage.response_metadata`` and returned
     as ``{"input_tokens": N, "output_tokens": N}`` to the audit trail.
 """
@@ -214,7 +214,7 @@ class ClaudeTool(Tool):
             return text, usage
 
     # ---------------------------------------------- JSON extraction
-    # Shared by GeminiTool and OllamaTool via import.
+    # Shared by GeminiTool via import.
 
     @staticmethod
     def _extract_json_block(text: str) -> dict:

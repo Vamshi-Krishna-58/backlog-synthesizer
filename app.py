@@ -179,24 +179,6 @@ _MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(512 * 1024)))
 # _INJECTION_PATTERNS list has been removed to prevent the two code paths from
 # diverging when rules are updated.
 
-# -------------------------------------------------------- Ollama auto-start
-# Start Ollama in the background if any stage uses a local model and the
-# server isn't already running. Runs once per session — idempotent.
-if "ollama_started" not in st.session_state:
-    import shutil as _shutil_startup
-    if _shutil_startup.which("ollama"):
-        try:
-            from ollama_manager import ensure_running as _ensure_ollama
-            _ok, _msg = _ensure_ollama(timeout=30)
-            st.session_state.ollama_started = _ok
-            st.session_state.ollama_msg = _msg
-        except Exception:  # noqa: BLE001
-            st.session_state.ollama_started = False
-            st.session_state.ollama_msg = "Ollama manager unavailable."
-    else:
-        st.session_state.ollama_started = False
-        st.session_state.ollama_msg = "Ollama not installed."
-
 st.set_page_config(
     page_title="Backlog Synthesizer · Accenture",
     page_icon="🟣",
@@ -1199,16 +1181,6 @@ if "dry_run_result" not in st.session_state:
 # Preset definitions are deliberately small and explicit — the spec lists
 # these exact mappings. "Balanced" is the default new-session value.
 MODEL_PRESETS: dict[str, dict[str, str]] = {
-    "local": {
-        # Free local models (Ollama) for the mechanical stages;
-        # Gemini Flash for the two reasoning-heavy stages.
-        # Requires: ollama serve + ollama pull llama3.2:3b
-        "parser":          "ollama/llama3.2:3b",
-        "constraint":      "ollama/llama3.2:3b",
-        "story_writer":    "gemini-2.5-flash",
-        "epic_decomposer": "ollama/llama3.2:3b",
-        "gap_detector":    "gemini-2.5-flash",
-    },
     "free": {
         "parser":          "gemini-2.5-flash",
         "constraint":      "gemini-2.5-flash",
@@ -1238,7 +1210,6 @@ MODEL_PRESETS: dict[str, dict[str, str]] = {
 # Cost-per-run band shown below the preset chips. Rough heuristics from
 # the spec — the real number lives in the post-run cost panel.
 PRESET_COST_BAND = {
-    "local":    "Local (Ollama) · ~$0  —  needs ollama serve",
     "free":     "Free tier (Gemini) · ~$0",
     "balanced": "~$0.01 per run",   # now 2× Claude stages (Story Writer + Gap Detector)
     "premium":  "~$0.03 per run",
@@ -1251,11 +1222,6 @@ MODEL_OPTIONS = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-2.5-pro",
-    "ollama/llama3.2:3b",
-    "ollama/llama3.1",
-    "ollama/mistral",
-    "ollama/phi3",
-    "ollama/gemma2",
 ]
 STAGE_KEYS = ("parser", "constraint", "story_writer", "epic_decomposer", "gap_detector")
 
@@ -1338,12 +1304,11 @@ if "models" not in st.session_state:
     base_preset = _saved_preset if _saved_preset in MODEL_PRESETS else "balanced"
     st.session_state.models = dict(MODEL_PRESETS[base_preset])
     # If the saved preset was "custom", restore the saved per-stage map.
-    # BUG FIX: widen the validity check to accept any recognised prefix
-    # (claude-*, gemini-*, ollama/*) so Ollama model IDs are not silently
-    # dropped when restoring a custom map.
+    # Accept any recognised provider prefix (claude-*, gemini-*) so a saved
+    # custom map isn't silently dropped when restoring.
     saved_custom = _persisted_ui.get("models") or {}
     if _saved_preset == "custom" and isinstance(saved_custom, dict):
-        _valid_prefixes = ("claude-", "gemini-", "ollama/")
+        _valid_prefixes = ("claude-", "gemini-")
         for k, v in saved_custom.items():
             if k in STAGE_KEYS and (
                 v in MODEL_OPTIONS
@@ -1635,16 +1600,12 @@ with st.sidebar:
 
         # ── MODELS ────────────────────────────────────────────────────────────
         st.markdown("### Models")
-        _label_to_key = {"Local": "local", "Free": "free", "Balanced": "balanced", "Premium": "premium"}
+        _label_to_key = {"Free": "free", "Balanced": "balanced", "Premium": "premium"}
         _key_to_label = {v: k for k, v in _label_to_key.items()}
         _allowed_preset_keys = list(MODEL_PRESETS.keys())
-        # Hide "Local" preset when Ollama binary is not installed (e.g. on Azure).
-        import shutil as _shutil
-        _ollama_installed = bool(_shutil.which("ollama"))
         _preset_labels = [
             lbl for lbl, key in _label_to_key.items()
             if key in _allowed_preset_keys
-            and (key != "local" or _ollama_installed)
         ] or ["Free", "Balanced"]
 
         _active = st.session_state.active_preset
@@ -1656,17 +1617,6 @@ with st.sidebar:
         # Check which providers are actually available right now.
         _has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
         _has_google    = bool(os.environ.get("GOOGLE_API_KEY", "").strip())
-
-        # For Ollama: do a live check so we pick up the server starting after
-        # the initial page load (the session-state flag only captures startup).
-        try:
-            from ollama_manager import is_running as _ollama_is_running, ensure_running as _ollama_ensure
-            _ollama_ok = _ollama_is_running()
-            if _ollama_ok:
-                st.session_state.ollama_started = True
-        except Exception:
-            _ollama_ok = st.session_state.get("ollama_started", False)
-
 
         # Each preset requires specific providers — derive its ready status.
         # We check env-var presence (fast); actual API validity is caught at run time.
@@ -1684,12 +1634,6 @@ with st.sidebar:
                 return (True, "")
             if key == "premium":
                 return (_has_anthropic, "needs ANTHROPIC_API_KEY")
-            if key == "local":
-                if not _ollama_ok:
-                    return (False, "Ollama offline")
-                if not _has_anthropic:
-                    return (False, "Ollama ok but needs ANTHROPIC_API_KEY for reasoning stages")
-                return (True, "")
             return (True, "")
 
         # ── Colored dot status row ────────────────────────────────────────────
@@ -1752,7 +1696,6 @@ with st.sidebar:
             help=(
                 "Free: all Gemini Flash · free tier.  "
                 "Balanced: Gemini Flash + Claude Sonnet for Story Writer & Gap Detector.  "
-                "Local: Ollama + Claude for reasoning · run ./start.sh to auto-start.  "
                 "Premium: all Claude Sonnet."
             ),
         )
@@ -1799,31 +1742,14 @@ with st.sidebar:
         # If the selected preset is not ready, show a clear actionable error.
         _sel_ready, _sel_reason = _preset_status(_picked_key)
         if not _sel_ready:
-            if _picked_key == "local" and not _ollama_ok:
-                # Auto-start Ollama instead of just showing an error.
-                with st.spinner("Starting Ollama…"):
-                    try:
-                        _ok2, _msg2 = _ollama_ensure(timeout=30)
-                    except Exception as _e:
-                        _ok2, _msg2 = False, str(_e)
-                if _ok2:
-                    st.session_state.ollama_started = True
-                    st.rerun()
-                else:
-                    st.error(
-                        f"**Could not start Ollama** — {_msg2}  \n"
-                        "Install from https://ollama.ai and run `ollama pull llama3.2:3b`, "
-                        "or switch to the **Balanced** preset."
-                    )
-            else:
-                _fix_hint = {
-                    "free":     "Add `GOOGLE_API_KEY=...` to your `.env` file.",
-                    "balanced": "Add the missing API key(s) to your `.env` file.",
-                    "premium":  "Add `ANTHROPIC_API_KEY=...` to your `.env` file.",
-                }.get(_picked_key, "Check your `.env` file.")
-                st.error(
-                    f"**{_picked_label} preset not available** — {_sel_reason}. {_fix_hint}"
-                )
+            _fix_hint = {
+                "free":     "Add `GOOGLE_API_KEY=...` to your `.env` file.",
+                "balanced": "Add the missing API key(s) to your `.env` file.",
+                "premium":  "Add `ANTHROPIC_API_KEY=...` to your `.env` file.",
+            }.get(_picked_key, "Check your `.env` file.")
+            st.error(
+                f"**{_picked_label} preset not available** — {_sel_reason}. {_fix_hint}"
+            )
 
         _vision_present = bool(vision_samples) or bool(vision_uploads)
         _transcript_ready = bool(transcript_choice) or bool(transcript_upload) or _vision_present

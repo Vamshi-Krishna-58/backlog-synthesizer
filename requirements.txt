@@ -17,14 +17,12 @@ chromadb>=0.4.22,<1.0.0
 # ── LangGraph / LangChain orchestration ───────────────────────────────────
 # LangGraph drives the multi-agent StateGraph pipeline (replaces the
 # custom Orchestrator loop). LangChain provider packages replace the
-# direct SDK wrappers in tools/claude_tool.py, gemini_tool.py, ollama_tool.py
+# direct SDK wrappers in tools/claude_tool.py, gemini_tool.py
 # while preserving the same call() / call_for_json() public interface.
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-anthropic>=0.3.0       # ChatAnthropic — replaces direct anthropic SDK calls
 langchain-google-genai>=2.0.0    # ChatGoogleGenerativeAI — replaces google-genai calls
-langchain-community>=0.3.0       # ChatOllama (fallback if langchain-ollama not available)
-langchain-ollama>=0.2.0          # preferred Ollama integration (langchain-community shim kept)
 
 # tenacity kept for non-LLM retry use cases; LangChain handles LLM retries natively
 tenacity>=8.2.3

@@ -15,7 +15,7 @@
 | Metrics endpoint | `GET :9090/metrics` (Prometheus scrape) |
 | Persistent data | `LOGS_DIR` + `OUTPUTS_DIR` (Azure Files share / EFS volume mount) |
 | Auth | Microsoft Entra SSO (primary) · YAML password file (fallback) |
-| LLM providers | Anthropic Claude (primary) · Google Gemini (balanced/free) · Ollama (local) |
+| LLM providers | Anthropic Claude (primary) · Google Gemini (balanced/free) |
 
 ---
 

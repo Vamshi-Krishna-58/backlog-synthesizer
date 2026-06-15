@@ -2,7 +2,7 @@
 Final round end-to-end test suite.
 Covers all modules added after test_new_modules.py:
   - entra_auth          (Entra ID SSO — parse_user, role mapping, URL construction)
-  - agent-level traces  (child_span in ClaudeTool, GeminiTool, OllamaTool)
+  - agent-level traces  (child_span in ClaudeTool, GeminiTool)
   - memory/store        (ChromaDB backend detection, search_similar routing)
   - mcp_server          (5 tools registered correctly)
   - evaluation/dashboard (--fail-on-regression CI gate)
@@ -163,13 +163,6 @@ class TestAgentLevelTraces:
         import inspect
         from tools.gemini_tool import GeminiTool
         src = inspect.getsource(GeminiTool._call_internal)
-        assert "child_span" in src or "_cs" in src
-
-    def test_ollama_tool_wraps_call_in_span(self, monkeypatch):
-        monkeypatch.setenv("OTEL_ENABLED", "0")
-        import inspect
-        from tools.ollama_tool import OllamaTool
-        src = inspect.getsource(OllamaTool._call_internal)
         assert "child_span" in src or "_cs" in src
 
     def test_guardrails_emit_spans_per_check(self, monkeypatch):

@@ -1,7 +1,5 @@
 # Backlog Synthesizer
 
-> **Version:** V2 (`v2_ui_polish`). A frozen V1 snapshot is preserved at [versions/v1_baseline/](versions/v1_baseline/).
-
 A multi-agent AI system that ingests customer meeting transcripts, architecture wikis, and existing engineering backlog tickets — and synthesizes the result into a structured set of epics, user stories, and tasks. Detects gaps and conflicts. Maintains an audit trail of every agent decision.
 
 Built as a demonstration of practical multi-agent AI engineering — bounded, testable, with persistent memory and an evaluation harness.
@@ -12,20 +10,8 @@ The bundled sample data is themed around **NorthStar Retail**, a fictional natio
 
 ## Demo
 
-> Capture instructions for these images are in [docs/screenshots/](docs/screenshots/) — run `make ui`, synthesize the bundled sample, and save the frames. They render here automatically once added.
-
-![Backlog Synthesizer demo](docs/screenshots/demo.gif)
-
-*Home → five-agent pipeline → epics/stories/tasks → gaps & conflicts → audit trail.*
-
-| | |
-|---|---|
-| ![Pipeline running](docs/screenshots/02_pipeline.png) | ![Epics → stories → tasks](docs/screenshots/03_epics.png) |
-| The five-agent pipeline, live | Structured output with traceable evidence |
-| ![Gaps / conflicts / duplicates](docs/screenshots/04_findings.png) | ![Audit trail](docs/screenshots/05_audit.png) |
-| Gap, conflict & duplicate detection | Full per-agent audit trail |
-
-Or run it yourself in one command: `make demo` (CLI) or `make ui` (web).
+Run it in one command: `make demo` (CLI) or `make ui` (web). The flow is:
+Home → five-agent pipeline → epics/stories/tasks → gaps & conflicts → audit trail.
 
 ---
 
@@ -96,7 +82,7 @@ A single **Orchestrator** coordinates five specialized agents, each calling tool
               (live/mocked) (live/mocked)
 ```
 
-See [architecture.md](versions/v1_baseline/architecture.md) for the detailed diagram + agent contracts.
+See [architecture.md](architecture.md) for the detailed diagram + agent contracts.
 
 ---
 
@@ -104,23 +90,33 @@ See [architecture.md](versions/v1_baseline/architecture.md) for the detailed dia
 
 ### Prerequisites
 
-- Python 3.9+
+- **Python 3.13** (required — the dependency lockfile and Docker image are built for 3.13;
+  newer versions such as 3.14 do not yet have wheels for some native dependencies, and
+  older versions miss features the project relies on)
 - An Anthropic API key
 
 ### Installation
 
 ```bash
 cd backlog-synthesizer
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python3.13 -m venv .venv
+source .venv/bin/activate
+# Install the PINNED, reproducible dependency set (avoids resolver conflicts).
+pip install -r requirements-lock.txt
 ```
+
+> Use `requirements-lock.txt`, not `requirements.txt`. The lockfile is fully pinned and
+> hash-verified for Python 3.13; the unpinned `requirements.txt` is only the input used to
+> regenerate the lock and can resolve to conflicting latest versions on a fresh machine.
 
 ### Configure your API key
 
+This step is **mandatory** — the app refuses to start without `ANTHROPIC_API_KEY` set
+(a fresh clone only ships `.env.example`, since `.env` is gitignored).
+
 ```bash
 cp .env.example .env
-# Edit .env and add your real key
+# Edit .env and add your real key: ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ### Run the bundled sample
@@ -256,9 +252,7 @@ backlog-synthesizer/
 │   ├── test_orchestrator.py         ← end-to-end with mocked Claude
 │   └── test_agents.py               ← per-agent unit tests + memory/audit tests
 └── docs/
-    ├── AGENT_DESIGN.md              ← why this multi-agent design
-    ├── PROMPT_ENGINEERING.md
-    └── AI_USAGE_SDLC.md             ← how AI was used in each SDLC phase
+    └── runbook.md                  ← operational runbook (providers, scaling, incident response)
 ```
 
 ---
