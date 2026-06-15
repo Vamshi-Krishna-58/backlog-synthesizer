@@ -48,7 +48,7 @@ resource "azurerm_role_assignment" "acr_push" {
 
 # ── Storage Account (persistent logs & outputs) ───────────────────────────────
 resource "azurerm_storage_account" "main" {
-  name                     = "stmeridianmotors"
+  name                     = var.storage_account_name
   resource_group_name      = azurerm_resource_group.main.name
   location                 = azurerm_resource_group.main.location
   account_tier             = "Standard"
@@ -115,6 +115,7 @@ locals {
     { name = "ENTRA_CLIENT_SECRET",  secret_name = "entra-client-secret" },
     { name = "LOGS_DIR",             value = "/app/data/logs" },
     { name = "OUTPUTS_DIR",          value = "/app/data/outputs" },
+    { name = "AUDIT_DB_PATH",        value = "/app/data/logs/audit_chain.db" },
   ]
 
   secrets = [
@@ -134,11 +135,26 @@ resource "azurerm_container_app" "staging" {
   revision_mode                = "Single"
   tags                         = merge(local.tags, { environment = "staging" })
 
+  # System-assigned managed identity — used to read secrets from Key Vault.
+  identity {
+    type = "SystemAssigned"
+  }
+
+  # acr-password is a plain secret (registry pull credential, not in Key Vault).
+  secret {
+    name  = "acr-password"
+    value = azurerm_container_registry.main.admin_password
+  }
+
+  # App secrets are Key Vault REFERENCES — the value lives only in Key Vault and
+  # is fetched at runtime via the system-assigned identity. No plaintext secret
+  # is ever stored on the container app.
   dynamic "secret" {
-    for_each = local.secrets
+    for_each = azurerm_key_vault_secret.app
     content {
-      name  = secret.value.name
-      value = secret.value.value
+      name                = secret.value.name
+      key_vault_secret_id = secret.value.versionless_id
+      identity            = "System"
     }
   }
 

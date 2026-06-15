@@ -175,3 +175,15 @@ variable "memory_requests" {
   type        = string
   default     = "2Gi"
 }
+
+variable "storage_account_name" {
+  description = "Storage account backing the Azure Files shares for persistent logs/outputs (globally unique, 3-24 lowercase alphanumeric)"
+  type        = string
+  default     = "stbacklogstg25296"
+}
+
+variable "key_vault_name" {
+  description = "Key Vault holding the staging app secrets (globally unique, 3-24 chars)"
+  type        = string
+  default     = "kv-backlog-stg25296"
+}
