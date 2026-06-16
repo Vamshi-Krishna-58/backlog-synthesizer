@@ -11,21 +11,49 @@
     "title": "OTA update progress bar stalls at 99% on slow connections",
     "body": "On weak signal, the OTA download completes but the install-verify step times out the UI, leaving the progress bar stuck at 99%. The update actually applies on next ignition cycle, but owners panic and call support. Decouple the UI from the install step and show an honest 'will finish on next start' state.",
     "state": "open",
-    "labels": ["ota", "driver-app", "ux"]
+    "labels": ["ota", "companion-app", "ux"]
+  },
+  {
+    "number": 136,
+    "title": "OTA orchestrator does not back off when CDN throughput cap is hit",
+    "body": "During peak deployment windows the OTA orchestrator keeps retrying at full rate when the CDN saturates, so batches stall in 'Update Pending' and block the next wave. Implement exponential back-off, a per-ring rollout throttle, and immediate resume-to-normal if an update stalls. Overlaps the staged-rollout ask from Q3 planning.",
+    "state": "open",
+    "labels": ["ota", "performance", "reliability"]
   },
   {
     "number": 131,
     "title": "Dealer portal SSO session expires mid-service-write, loses form data",
     "body": "Service advisors lose a partially entered RecallHub service record when their SAML session expires. Re-authenticate transparently and preserve the in-progress form rather than dumping them to the login page.",
     "state": "open",
-    "labels": ["dealer-portal", "auth", "vis"]
+    "labels": ["dealer-portal", "security"]
+  },
+  {
+    "number": 129,
+    "title": "Two-factor authentication missing on the dealer portal",
+    "body": "The dealer portal exposes owner PII but only requires a single-factor login. Add 2FA federated through VehicleIdentityService for the top-20 dealer groups first. Related to the SSO work in #131.",
+    "state": "open",
+    "labels": ["dealer-portal", "security", "compliance"]
   },
   {
     "number": 127,
     "title": "Charger 'Available Now' badge stale by up to 6 hours",
     "body": "Navigation search shows availability from the POI cache instead of the live charging-network feed. Drivers route to chargers that are offline or occupied. Wire the live availability stream with a freshness SLA. Likely overlaps with JIRA AD-412.",
     "state": "open",
-    "labels": ["navigation", "ev-charging", "duplicate-suspect"]
+    "labels": ["navigation", "ev-charging"]
+  },
+  {
+    "number": 124,
+    "title": "Warranty claims submitted in-app don't reconcile with the dealer service desk",
+    "body": "The in-app claim channel and the dealer service-desk direct entry write to different systems and don't reconcile in real time, so owners are told 'no record' at the dealer. Establish one unified claim record per VIN/incident through RecallHub regardless of intake channel.",
+    "state": "open",
+    "labels": ["dealer-portal", "compliance"]
+  },
+  {
+    "number": 121,
+    "title": "Connected-services trial end date is not visible on any owner surface",
+    "body": "Owners get a 'Welcome to Premium Connected!' email at delivery, then a downgrade 12 months later with no warning, because the trial end date isn't shown anywhere in the app. Surface a subscription-status card with trial end date, included features, and renewal path. Overlaps JIRA AD-389.",
+    "state": "open",
+    "labels": ["connected-services", "companion-app"]
   },
   {
     "number": 119,
@@ -35,10 +63,31 @@
     "labels": ["connected-services", "payments", "compliance"]
   },
   {
+    "number": 112,
+    "title": "Gen1 TCU (2018-2020) vehicles can only receive full-image OTA, not differential",
+    "body": "The Gen1 Telematics Control Unit with 512 MB RAM cannot apply differential OTA packages and does not support TLS 1.3. Until the hardware service campaign completes, the OTA pipeline must detect Gen1 vehicles and route them to full-image packages over a TLS 1.2 path. Flag the capability floor on every new connected-feature story.",
+    "state": "open",
+    "labels": ["ota", "telematics", "infotainment"]
+  },
+  {
+    "number": 108,
+    "title": "Infotainment unresponsive while an OTA update is stuck pending",
+    "body": "When a deployment stalls, the head unit becomes unresponsive for the duration instead of staying usable. Owners should retain full infotainment function while an update waits or retries in the background.",
+    "state": "open",
+    "labels": ["infotainment", "ota", "offline-mode"]
+  },
+  {
     "number": 103,
     "title": "Telematics event consumer falls behind during nightly fleet sync",
     "body": "The RabbitMQ consumer for the telematics event stream backs up during the 02:00 UTC fleet sync, delaying recall-trigger events by up to 20 minutes. Related to the planned Kafka migration; track here for the short-term backpressure fix.",
     "state": "open",
-    "labels": ["telematics", "infra", "performance"]
+    "labels": ["telematics", "fleet", "performance"]
+  },
+  {
+    "number": 97,
+    "title": "Companion app not localised for Spanish and French owners",
+    "body": "Large owner segments in TX/CA and QC see English-only strings in the companion app, hurting accessibility and adoption. Add full localisation for Spanish and French, including OTA and recall notification copy.",
+    "state": "open",
+    "labels": ["companion-app", "accessibility"]
   }
 ]

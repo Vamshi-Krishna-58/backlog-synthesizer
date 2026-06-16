@@ -1346,7 +1346,7 @@ CONSTRAINTS_OPTIONS = {
 BACKLOG_OPTIONS = {
     "JIRA backlog (30 tickets)":
         SAMPLES_DIR / "jira_backlog.json",
-    "GitHub issues (6 tickets)":
+    "GitHub issues (13 tickets)":
         SAMPLES_DIR / "github_issues.json",
 }
 
