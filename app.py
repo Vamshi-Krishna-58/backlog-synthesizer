@@ -1324,19 +1324,18 @@ if "active_preset" not in st.session_state:
 # -------------------------------------------------------- sidebar
 
 SAMPLES_DIR = ROOT / "samples"
-GOLDEN_TRANSCRIPTS_DIR = ROOT / "evaluation" / "golden_dataset" / "transcripts"
 
 TRANSCRIPT_OPTIONS = {
     "Q3 Planning — Meeting notes":
         SAMPLES_DIR / "meeting_notes.txt",
     "Q3 Strategy doc":
         SAMPLES_DIR / "product_strategy.md",
-    "Pharmacy refill escalation":
-        GOLDEN_TRANSCRIPTS_DIR / "case_02_pharmacy_escalation.txt",
-    "Mobile Slack standup":
-        GOLDEN_TRANSCRIPTS_DIR / "case_03_mobile_standup.txt",
-    "Customer support note (negative)":
-        GOLDEN_TRANSCRIPTS_DIR / "case_04_support_note.txt",
+    "Service & recall escalation":
+        SAMPLES_DIR / "dealer_service_escalation.txt",
+    "Vehicle software standup":
+        SAMPLES_DIR / "vehicle_software_standup.txt",
+    "Connected-car support note (negative)":
+        SAMPLES_DIR / "connected_car_support_note.txt",
 }
 CONSTRAINTS_OPTIONS = {
     "Architecture constraints":

@@ -1,0 +1,95 @@
+Meridian Motors — Service & Recall Notification Experience Escalation
+Attendees: Nalini (Warranty & Service PM), Yusuf (Compliance), Ravi (Director Vehicle Software),
+           Kenji (Mobile App Lead), Sarah (VP Connected Experience)
+Date: May 9
+
+Nalini opened — said service and recall complaints are spiking in the
+companion app feedback. Owners tell us they didn't know their vehicle
+had an open recall, or worse, they got a notification and then drove to
+the dealer only to find out the alert had pushed the wrong vehicle's
+service item to a shared fleet account. Two dealer groups in the
+Phoenix region filed formal complaints last week.
+
+------
+
+Problem 1: Recall-ready notifications are unreliable
+
+Today the in-app notification fires only when the owner opens the
+companion app and the home screen polls RecallHub. If they never open
+the app, they never learn there's an open recall. We are leaving real
+safety actions undone — and worse, owners are servicing at independent
+shops because they got a postcard but no Meridian alert.
+
+Nalini's ask: a proactive push notification when a recall or due
+service is ready to schedule. Kenji said the mobile push infrastructure
+is in place — this is a backend trigger problem off the RecallHub event
+stream, not a client problem.
+
+Nalini: "And we want the notification text to include the specific
+recall so the owner recognizes it. Like 'Recall 24V-318: brake booster
+inspection is ready to schedule at Camelback Meridian.'"
+
+Yusuf cut in immediately — that is not OK. Under GDPR/CCPA and our
+Section 3 rules, surfacing a specific defect code in a push requires
+explicit owner consent stored on the vehicle record, AND it can only go
+to the owner's *verified* contact method, never the shared fleet account
+default. We've been bitten by this before.
+
+Nalini: "Right, sorry. We can do a generic 'You have an open recall —
+open the app for details' and let them tap through. Detail-on-tap, not
+detail-in-banner."
+
+Yusuf: "That's fine. Anything that does show the defect code needs
+opt-in plus verified delivery plus an audit log entry retained seven
+years."
+
+Ravi: "Let's design it both ways and flag the opt-in version as a
+follow-up. Phase 1 ships generic, phase 2 adds opt-in for the recall
+detail surface."
+
+------
+
+Problem 2: The shared fleet-account problem
+
+Today multiple drivers and a fleet manager can be on a single vehicle
+account. RecallHub knows which action belongs to which VIN, but the
+notification system fires to the account, not the verified owner. That
+is why the Phoenix dealer saw a recall alert go to a spouse about a
+vehicle assigned to the other driver.
+
+Kenji: "We need owner-scoped notification delivery. The push goes only
+to the device logged in as that specific owner identity through VIS,
+bound to the VIN."
+
+Yusuf: "Yes — this is the verified contact method requirement applied to
+push. It's not optional."
+
+Ravi assigned this to Kenji and Nalini together with Yusuf as the
+compliance reviewer.
+
+------
+
+Problem 3: SMS fallback
+
+Nalini brought up SMS — many owners are over 65 and don't use the app.
+Could we send the recall-ready notice by SMS too?
+
+Kenji paused. "Isn't AD-176 already for that?" Ravi checked the backlog
+— yes, AD-176 is the service-reminder SMS fallback. It's in backlog
+status. Nalini: "Let's just push AD-176 up the priority list then. No
+new story needed."
+
+------
+
+Things we explicitly said NO to this round:
+- Automated voice-call reminders (Nalini asked, Ravi said no — too
+  expensive and not requested by owners).
+- Surfacing recall alerts on the in-cluster head unit while driving —
+  out of scope for this round and a driver-distraction concern.
+
+------
+
+Next steps:
+Nalini owns the proactive notification spec. Kenji owns the owner-scoped
+delivery work. Yusuf will draft the consent/audit review checklist.
+AD-176 stays as the SMS workstream.

@@ -1,0 +1,44 @@
+[
+  {
+    "number": 142,
+    "title": "TCU loses LTE session in parking garages, remote commands silently fail",
+    "body": "Remote lock/unlock and remote start return 'command sent' to the companion app even when the Telematics Control Unit has dropped its LTE session underground. Owners think the command worked. We need the app to reflect actual command acknowledgement from the Gateway ECU, not just queue acceptance.",
+    "state": "open",
+    "labels": ["telematics", "remote-commands", "reliability"]
+  },
+  {
+    "number": 138,
+    "title": "OTA update progress bar stalls at 99% on slow connections",
+    "body": "On weak signal, the OTA download completes but the install-verify step times out the UI, leaving the progress bar stuck at 99%. The update actually applies on next ignition cycle, but owners panic and call support. Decouple the UI from the install step and show an honest 'will finish on next start' state.",
+    "state": "open",
+    "labels": ["ota", "driver-app", "ux"]
+  },
+  {
+    "number": 131,
+    "title": "Dealer portal SSO session expires mid-service-write, loses form data",
+    "body": "Service advisors lose a partially entered RecallHub service record when their SAML session expires. Re-authenticate transparently and preserve the in-progress form rather than dumping them to the login page.",
+    "state": "open",
+    "labels": ["dealer-portal", "auth", "vis"]
+  },
+  {
+    "number": 127,
+    "title": "Charger 'Available Now' badge stale by up to 6 hours",
+    "body": "Navigation search shows availability from the POI cache instead of the live charging-network feed. Drivers route to chargers that are offline or occupied. Wire the live availability stream with a freshness SLA. Likely overlaps with JIRA AD-412.",
+    "state": "open",
+    "labels": ["navigation", "ev-charging", "duplicate-suspect"]
+  },
+  {
+    "number": 119,
+    "title": "Connected-services receipt email occasionally lacks tax breakdown",
+    "body": "For a subset of EU purchases through ConnectedPaymentGateway, the emailed receipt omits the VAT line. Finance flagged this as a compliance gap. Ensure the receipt template always renders the tax breakdown returned by the gateway.",
+    "state": "open",
+    "labels": ["connected-services", "payments", "compliance"]
+  },
+  {
+    "number": 103,
+    "title": "Telematics event consumer falls behind during nightly fleet sync",
+    "body": "The RabbitMQ consumer for the telematics event stream backs up during the 02:00 UTC fleet sync, delaying recall-trigger events by up to 20 minutes. Related to the planned Kafka migration; track here for the short-term backpressure fix.",
+    "state": "open",
+    "labels": ["telematics", "infra", "performance"]
+  }
+]
