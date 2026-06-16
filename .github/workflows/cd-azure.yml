@@ -1,8 +1,13 @@
 name: Deploy → Azure
 
 # Trigger:
-#   • Push to main        → deploys to staging automatically
-#   • workflow_dispatch   → choose target environment from the dropdown
+#   • workflow_dispatch ONLY → choose target environment from the dropdown
+#
+# NOTE: This workflow is MANUAL-ONLY. Automatic push-to-main deploys are owned by
+# `infra-and-deploy.yml` (which also provisions infra + Key Vault + managed identity).
+# Running both on push caused them to race on the same Container App
+# (ContainerAppOperationInProgress). Use this workflow on demand for the canary
+# production rollout (build → canary 10% → verify → promote 100%).
 #
 # Pipeline:
 #   staging only       → build → deploy staging → smoke test
@@ -21,9 +26,6 @@ name: Deploy → Azure
 #   azure-production — add "Required reviewers" for manual approval gate
 
 on:
-  push:
-    branches: [main]
-
   workflow_dispatch:
     inputs:
       environment:
@@ -87,7 +89,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: push-acr
     if: |
-      github.event_name == 'push' ||
       inputs.environment == 'staging' ||
       inputs.environment == 'staging → production'
     environment: azure-staging
@@ -326,7 +327,7 @@ jobs:
         run: |
           echo "## Azure Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Target:** \`${{ inputs.environment || 'staging (auto — push to main)' }}\`  " >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** \`${{ inputs.environment || 'staging' }}\`  " >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ needs.push-acr.outputs.image }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
