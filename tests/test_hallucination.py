@@ -54,10 +54,10 @@ class FakeClaudeTool:
             return {
                 "topics": [{
                     "id": "T-01",
-                    "theme": "offline POS",
-                    "summary": "Process cash sales when offline",
-                    "raw_quote": "cashiers can't process returns when WiFi drops",
-                    "speaker": "Store Manager",
+                    "theme": "offline telematics",
+                    "summary": "Log trips when offline",
+                    "raw_quote": "drivers lose trip history when signal drops",
+                    "speaker": "Fleet Lead",
                     "sentiment": "frustrated",
                 }],
                 "summary": "One topic extracted.",
@@ -70,8 +70,8 @@ class FakeClaudeTool:
                     "id": "C-01",
                     "severity": "must",
                     "category": "compliance",
-                    "statement": "Card sales must stay online-only per PCI-DSS.",
-                    "source_excerpt": "PCI compliance requires online card validation.",
+                    "statement": "Payments must go through ConnectedPaymentGateway per PCI-DSS.",
+                    "source_excerpt": "PCI compliance requires gateway tokenization.",
                     "applies_to": ["payments"],
                 }]
             }, {}
@@ -84,16 +84,16 @@ class FakeClaudeTool:
             return {
                 "stories": [{
                     "id": "ST-01",
-                    "title": "Enable offline cash sales at POS",
-                    "description": "Store ops need cash sales to work without internet.",
-                    "user_story": "As a store associate, I want to process cash sales offline.",
+                    "title": "Enable offline trip logging on the head unit",
+                    "description": "Telematics needs trip logging to work without connectivity.",
+                    "user_story": "As a driver, I want trips logged offline.",
                     "acceptance_criteria": [
-                        "Given the POS is offline, when a cash sale is submitted, then it queues locally.",
-                        "Given connectivity is restored, when queued sales sync, then each posts exactly once.",
+                        "Given the vehicle is offline, when a trip is logged, then it queues locally.",
+                        "Given connectivity is restored, when queued trips sync, then each posts exactly once.",
                     ],
                     "priority": "High",
-                    "priority_rationale": "Store Ops reports sales loss during weekly WAN outages.",
-                    "tags": ["pos", "offline-mode", "payments"],
+                    "priority_rationale": "Telematics reports trip-data loss during connectivity gaps.",
+                    "tags": ["telematics", "offline-mode", "payments"],
                     "source_topic_id": topics[0].get("id", "T-01"),
                     "potential_constraint_conflicts": [],
                 }]
@@ -107,8 +107,8 @@ class FakeClaudeTool:
             return {
                 "epics": [{
                     "id": "EP-01",
-                    "title": "Offline-Resilient POS",
-                    "description": "Enable store operations without internet dependency.",
+                    "title": "Offline-Resilient Telematics",
+                    "description": "Enable vehicle operations without connectivity dependency.",
                     "stories": [{
                         **stories[0],
                         "tasks": [
@@ -183,7 +183,7 @@ class TestOffTopicHallucination:
     OFF_TOPIC_TRANSCRIPT = """
     Subject: Lunch tomorrow?
     Hey team — reminder that tomorrow's lunch is at the new ramen place on 4th Street.
-    Reservation is at 12:15 under NorthStar. Also Priya's birthday cake is in the kitchen.
+    Reservation is at 12:15 under Meridian. Also Sarah's birthday cake is in the kitchen.
     Someone left a yellow umbrella in conference room B. Lost & found is the front desk.
     """
 
@@ -230,7 +230,7 @@ class TestSourceGrounding:
 
     REAL_TRANSCRIPT = """
     Sprint planning - Q3 offline features.
-    Store Manager: cashiers can't process returns when WiFi drops.
+    Fleet Lead: drivers lose trip history when signal drops.
     We need offline capability for all cash transactions.
     """
 
@@ -264,7 +264,7 @@ class TestSourceGrounding:
                 "source_topic_id": None,  # no grounding
                 "acceptance_criteria": ["Given x, when y, then z.", "Given a, when b, then c."],
                 "priority": "High", "priority_rationale": "Important.",
-                "tags": ["pos"], "evidence": [],
+                "tags": ["telematics"], "evidence": [],
             }]}],
         }
         findings = run_guardrails(synthesis)
@@ -282,7 +282,7 @@ class TestSourceGrounding:
                 "source_topic_id": "T-DOES-NOT-EXIST",
                 "acceptance_criteria": ["Given x, when y, then z.", "Given a, when b, then c."],
                 "priority": "Medium", "priority_rationale": "Useful.",
-                "tags": ["pos"], "evidence": [],
+                "tags": ["telematics"], "evidence": [],
             }]}],
         }
         findings = run_guardrails(synthesis)
@@ -302,21 +302,21 @@ class TestEvidenceAnchoring:
         from agents.story_writer_agent import StoryWriterAgent
         topics = [{
             "id": "T-01",
-            "theme": "offline POS",
-            "raw_quote": "cashiers can't process returns when WiFi drops",
-            "speaker": "Store Manager",
+            "theme": "offline telematics",
+            "raw_quote": "drivers lose trip history when signal drops",
+            "speaker": "Fleet Lead",
             "sentiment": "frustrated",
         }]
         story = {
             "id": "ST-01",
-            "title": "Enable offline returns",
+            "title": "Enable offline trip logging",
             "source_topic_id": "T-01",
         }
         StoryWriterAgent._attach_evidence(story, {"T-01": topics[0]})
         ev = story.get("evidence") or []
         assert len(ev) == 1
-        assert ev[0]["raw_quote"] == "cashiers can't process returns when WiFi drops"
-        assert ev[0]["speaker"]   == "Store Manager"
+        assert ev[0]["raw_quote"] == "drivers lose trip history when signal drops"
+        assert ev[0]["speaker"]   == "Fleet Lead"
 
     def test_placeholder_evidence_is_suppressed(self):
         """LLM-generated placeholder quotes ('...') are stripped — not shown to user."""
@@ -357,10 +357,10 @@ class TestPlaceholderRepair:
     """
 
     TOPICS = [
-        {"id": "T-01", "theme": "offline POS", "summary": "cash sales during WAN outage",
-         "raw_quote": "we lose sales when internet drops"},
-        {"id": "T-02", "theme": "loyalty programme", "summary": "points not updating",
-         "raw_quote": "my loyalty points never show after purchase"},
+        {"id": "T-01", "theme": "offline telematics", "summary": "offline trip logging during connectivity loss",
+         "raw_quote": "we lose trip history when signal drops"},
+        {"id": "T-02", "theme": "connected services", "summary": "renewal date not updating",
+         "raw_quote": "my renewal date never updates after purchase"},
     ]
     TOPICS_BY_ID = {t["id"]: t for t in TOPICS}
 
@@ -371,11 +371,11 @@ class TestPlaceholderRepair:
         return story["source_topic_id"]
 
     def test_dots_placeholder_repaired_to_best_match(self):
-        repaired = self._repair("Enable offline cash sales at POS during WAN outage", "...")
+        repaired = self._repair("Enable offline trip logging during connectivity loss", "...")
         assert repaired == "T-01", f"Expected T-01, got {repaired}"
 
-    def test_loyalty_story_maps_to_loyalty_topic(self):
-        repaired = self._repair("Fix loyalty points not updating after online purchase", "null")
+    def test_renewal_story_maps_to_renewal_topic(self):
+        repaired = self._repair("Fix connected services renewal date not updating after purchase", "null")
         assert repaired == "T-02", f"Expected T-02, got {repaired}"
 
     def test_valid_id_never_changed(self):
@@ -383,7 +383,7 @@ class TestPlaceholderRepair:
         assert repaired == "T-02"
 
     def test_unknown_id_repaired_semantically(self):
-        repaired = self._repair("POS cash transaction offline queue WAN", "T-99")
+        repaired = self._repair("trip logging offline queue connectivity", "T-99")
         assert repaired in ("T-01", "T-02"), "Must repair to a real topic"
 
 
@@ -432,7 +432,7 @@ class TestAcceptanceCriteriaQuality:
                 ],
                 "priority": "Medium",
                 "priority_rationale": "Important for users.",
-                "tags": ["pos"],
+                "tags": ["telematics"],
                 "evidence": [{"raw_quote": "real quote"}],
             }]}],
         }
@@ -449,13 +449,13 @@ class TestAcceptanceCriteriaQuality:
                 "title": "Well-formed story",
                 "source_topic_id": "T-01",
                 "acceptance_criteria": [
-                    "Given the POS is offline, when a cash sale is submitted, then it queues.",
-                    "Given connectivity restores, when queue syncs, then each sale posts once.",
+                    "Given the vehicle is offline, when a trip is logged, then it queues.",
+                    "Given connectivity restores, when queue syncs, then each trip posts once.",
                 ],
                 "priority": "High",
-                "priority_rationale": "Store ops reports sales loss during WAN outages.",
-                "tags": ["pos"],
-                "evidence": [{"raw_quote": "we lose sales when internet drops"}],
+                "priority_rationale": "Telematics reports trip-data loss during connectivity gaps.",
+                "tags": ["telematics"],
+                "evidence": [{"raw_quote": "we lose trip history when signal drops"}],
             }]}],
         }
         findings = run_guardrails(synthesis)

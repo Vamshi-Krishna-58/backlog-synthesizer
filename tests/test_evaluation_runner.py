@@ -64,7 +64,7 @@ class _FakeOrchestrator:
                                               "Given A, when B, then C."],
                      "priority": "High",
                      "priority_rationale": "Critical for Q3.",
-                     "tags": ["pos"]},
+                     "tags": ["telematics"]},
                 ]},
             ],
             "gaps": [], "conflicts": [], "duplicates": [],

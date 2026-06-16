@@ -1,24 +1,24 @@
-NorthStar Retail — quarterly customer panel, 2026-04-22
-Attendees: Customer Advisory Board (4 customers), Marcus (PM), Priya (CS)
+Meridian Motors — quarterly owner panel, 2026-04-22
+Attendees: Owner Advisory Board (4 owners), Marcus (PM), Priya (Owner Experience)
 
 Marcus: Open question — what should we focus on next quarter?
 
-Customer A: I dunno, just make it better.
+Owner A: I dunno, just make it better.
 
-Customer B: The app sometimes feels slow but it's hard to say when. Maybe checkout?
+Owner B: The infotainment screen sometimes feels slow but it's hard to say when. Maybe the app too?
 
-Customer C: I want more discounts.
+Owner C: I want more free charging.
 
-Customer D: Loyalty should be more rewarding. I'm not sure what that means exactly.
+Owner D: Connected services should be more rewarding. I'm not sure what that means exactly.
 
 Marcus: Anything more specific?
 
-Customer A: Just the vibes. The vibes are off.
+Owner A: Just the vibes. The vibes are off.
 
-Customer B: Yeah I think the search is fine? Mostly?
+Owner B: Yeah I think navigation is fine? Mostly?
 
-Customer C: I had a thing happen last week but I forget what.
+Owner C: I had a thing happen last week but I forget what.
 
 Marcus: OK. Anything actionable?
 
-Priya: (after the call) Marcus, I think the only signal we got was that mobile checkout feels slow to at least one person — and even that was hedged.
+Priya: (after the call) Marcus, I think the only signal we got was that the companion app feels slow to at least one person — and even that was hedged.

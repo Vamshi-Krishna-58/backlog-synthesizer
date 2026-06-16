@@ -1,6 +1,6 @@
 {
   "case_id": "case_07",
-  "description": "Multiple requested capabilities all conflict with the PCI / offline-mode constraints in the architecture wiki. The Gap Detector must flag at least one constraint conflict, ideally multiple.",
+  "description": "Multiple requested capabilities each conflict with the architecture constraints: direct card-processor calls from the app (forbidden, ConnectedPaymentGateway), an unsigned hotfix OTA (forbidden, Code Signing Authority), automatic rollback of an ADAS update (forbidden, ISO 26262), and 5-second cloud telemetry polling (forbidden, <30s). The Gap Detector must flag at least the payment and OTA conflicts, ideally all four.",
   "transcript_path": "evaluation/golden_dataset/transcripts/case_07_conflict_heavy.txt",
   "constraints_path": "samples/architecture_constraints.md",
   "backlog_path": "samples/jira_backlog.json"

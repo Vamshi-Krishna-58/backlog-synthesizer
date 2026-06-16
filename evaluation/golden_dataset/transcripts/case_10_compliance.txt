@@ -1,14 +1,14 @@
-NorthStar Retail — annual compliance review, 2026-03-30
+Meridian Motors — annual compliance review, 2026-03-30
 Attendees: Diego (Compliance), Aisha (Engineering), Sara (Legal)
 
 Diego: Three findings from the audit.
 
-1. Pharmacy refill notifications — we're sending PHI (prescription names) in plain-text email. This is a HIPAA violation. We need to move to a "Your prescription is ready" generic message with a deep link to the secure app.
+1. UNECE WP.29 / ISO 21434 cybersecurity attestation — our annual evidence collection for the OTA update pipeline lapsed. We have no current attestation that every OTA package is signed by the Code Signing Authority and validated at the TCU. The auditor wants the full attestation re-run with InfoSec.
 
-2. Loyalty member exports — Marketing has been pulling member-level lists with email + tier + purchase history into Salesforce. Per GDPR Article 6, we need explicit consent for that purpose. Right now we have consent for "transactional" only.
+2. EU owner data residency — Marketing has been replicating EU owner profiles (email + tier + location history) into a US-East analytics warehouse. Per GDPR, EU driver PII must stay in our EU-West and EU-Central regions. Cross-region replication of that PII is forbidden. We need to stop the replication and re-region the affected data.
 
-3. POS card receipts — we're printing the last 4 of the PAN, which is fine, but the e-receipt email is including the full card brand + last 4 + expiry month. PCI DSS 3.4 says we have to drop the expiry.
+3. PCI tokenization gap — the connected-services renewal e-receipt is including the full card brand + last 4 + expiry month, and one legacy path still stores a raw card reference. PCI DSS requires that card data never touch our servers — everything must be a ConnectedPaymentGateway token, and the expiry must be dropped from the receipt.
 
-Sara: Three fixes. The HIPAA one is the most urgent — auditors flagged it for the 90-day window.
+Sara: Three fixes. The data-residency one is the most urgent — auditors flagged it for the 90-day window.
 
-Aisha: Pharmacy refill notification rewrite, loyalty consent collection flow, and POS receipt expiry removal. Got it.
+Aisha: WP.29 cybersecurity attestation re-run, EU data-residency re-regioning, and PCI receipt tokenization cleanup. Got it.

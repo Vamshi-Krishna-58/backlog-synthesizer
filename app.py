@@ -43,7 +43,7 @@ load_dotenv(ROOT / ".env")
 
 # Configurable client / org name shown on the login page and in the UI.
 # Override with CLIENT_NAME env var — no code change needed for redeployment.
-CLIENT_NAME: str = os.environ.get("CLIENT_NAME", "NorthStar Retail")
+CLIENT_NAME: str = os.environ.get("CLIENT_NAME", "Meridian Motors")
 
 # --- Persistent-storage directories (overridable via env vars for Azure) ---
 # In Azure, a single Azure Files share is mounted at /app/backlog-data; the

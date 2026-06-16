@@ -42,8 +42,8 @@ from tools.jira_tool import JiraTool
 TOP_K = 5
 # Cosine-similarity threshold for the local embeddings-based duplicate
 # detector. Lowered from 0.75 → 0.6 after observing that thematically
-# clear matches (e.g. "Pharmacy refill SMS reminder" vs "Notify customer
-# when prescription is ready") were scoring 0.62-0.70 on
+# clear matches (e.g. "Recall notification SMS reminder" vs "Notify owner
+# when a recall is open") were scoring 0.62-0.70 on
 # `all-MiniLM-L6-v2`. 0.75 was leaving real duplicates on the table.
 # 0.6 trades a few extra LLM-rerank invocations for materially better
 # recall — the LLM downstream still rejects false positives.

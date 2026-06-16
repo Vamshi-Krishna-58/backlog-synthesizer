@@ -1,22 +1,26 @@
-NorthStar Retail — Store Ops emergency call, 2026-05-02
-Attendees: Hiroshi (Store Ops), Aisha (Engineering), Diego (Compliance, on speakerphone)
+Meridian Motors — Platform emergency call, 2026-05-02
+Attendees: Hiroshi (Product), Aisha (Engineering), Diego (Compliance/Architecture, on speakerphone)
 
-Hiroshi: Stores are screaming. When the WAN goes down — and it goes down weekly in the rural lanes — we lose ALL sales. Not just card sales, all sales. I want offline mode for card sales too. Just queue the transactions and post when WAN returns.
+Hiroshi: We're losing owners at the connected-services renewal step and the funnel team thinks the extra network hop is the problem. I want the app to call the card processor directly and skip the gateway. Just authorize the card right from the companion app.
 
-Aisha: Hiroshi, you know we can't queue card-not-present transactions offline. Compliance side.
+Aisha: Hiroshi, you know we can't do that. Direct calls to card processors are forbidden.
 
-Diego: Confirmed. PCI rules forbid storing PAN data locally beyond the transaction window. The wiki section 4 spells this out.
+Diego: Confirmed. PCI scope reduction requires every payment authorization to go through the ConnectedPaymentGateway, which hands back a token. The app must never touch the PAN. The architecture wiki Section 2 spells this out.
 
-Hiroshi: Fine. Then I want offline returns. A customer hands back the receipt, we scan the QR, refund to their card later when WAN comes back.
+Hiroshi: Fine. Then I want to ship an unsigned hotfix OTA tonight to fix the renewal screen — we don't have time to wait for the signing pipeline.
 
-Diego: That's the same problem — you're holding card-tied financial intent across a network boundary.
+Diego: That's a hard no. All OTA packages must be cryptographically signed by the Meridian Code Signing Authority. The TCU rejects unsigned or self-signed packages outright. UNECE WP.29 / ISO 21434.
 
-Hiroshi: Then I want gift-card sales offline. We just print a gift card and reconcile when online.
+Hiroshi: Then at least let me set the ADAS update to auto-rollback automatically if owners complain in the reviews. No HIL, just flip it back.
 
-Aisha: That one's borderline. We'd need to look at it but probably blocked by the same compliance section.
+Aisha: We can't auto-rollback a safety-critical ECU update. ADAS, braking, steering — automatic rollback is forbidden without a validated rollback image. ISO 26262.
 
-Diego: Same family of rules. Anything tied to a stored card or a delayed financial commitment is in scope.
+Diego: Same family of rules. Anything safety-critical needs offline HIL validation first.
 
-Hiroshi: So my three requests — offline card sales, offline returns, offline gift-card sales — are all blocked?
+Hiroshi: And one more — to make the renewal dashboard feel live, I want to poll vehicle telemetry from the cloud every 5 seconds.
 
-Diego: I'd flag all three as compliance conflicts. The wiki is explicit.
+Diego: Also blocked. Polling telemetry from the cloud at intervals under 30 seconds is forbidden — use the telematics event stream instead.
+
+Hiroshi: So all four of my requests — direct card-processor calls, unsigned OTA hotfix, ADAS auto-rollback, 5-second telemetry polling — are blocked?
+
+Diego: I'd flag all four as architecture/compliance conflicts. The wiki is explicit.

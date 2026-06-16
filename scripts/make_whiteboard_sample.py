@@ -1,10 +1,11 @@
 """Generate a hand-drawn-style whiteboard photo for the vision demo.
 
-Produces samples/whiteboard_sprint_planning.png — a NorthStar Retail sprint
+Produces samples/whiteboard_sprint_planning.png — a Meridian Motors sprint
 planning sketch (marker boxes, sticky notes, arrows). Feeding it through the
-Parser (vision-capable model) should yield topics for POS offline mode, the
-loyalty tier view, pharmacy refill unification, and a PCI-blocked offline-card
-ask — i.e. it exercises stories + a constraint conflict from an *image*.
+Parser (vision-capable model) should yield topics for telematics offline mode,
+the connected-services renewal view, recall notification unification, and a
+PCI-blocked direct card-processor ask — i.e. it exercises stories + a
+constraint conflict from an *image*.
 
 Run:  python scripts/make_whiteboard_sample.py
 """
@@ -96,45 +97,45 @@ def main() -> int:
     d.rectangle((14, 14, W - 14, H - 14), outline=(180, 178, 170), width=10)
 
     # Title
-    text(d, (60, 40), "NorthStar Retail  —  Sprint Planning", INK["black"], 58)
+    text(d, (60, 40), "Meridian Motors  —  Sprint Planning", INK["black"], 58)
     sketch_line(d, (62, 118), (760, 118), INK["blue"], 4)
-    text(d, (1080, 52), "Q3  ·  Mobile + POS", INK["violet"], 30)
+    text(d, (1080, 52), "Q3  ·  Companion App + Infotainment", INK["violet"], 30)
 
     # --- Left column: marker boxes ---
     sketch_box(d, (60, 165, 690, 320), INK["blue"], 4)
-    text(d, (80, 180), "POS OFFLINE MODE", INK["blue"], 38)
+    text(d, (80, 180), "TELEMATICS OFFLINE MODE", INK["blue"], 38)
     text(d, (80, 232),
-         "keep CASH sales working when\nthe WAN drops (rural lanes!)  ~weekly",
+         "keep TRIP logging working when\nthe WAN drops (rural routes!)  ~weekly",
          INK["black"], 30)
     text(d, (600, 175), "P1", INK["red"], 40)
 
     sketch_box(d, (60, 360, 690, 520), INK["green"], 4)
-    text(d, (80, 374), "PHARMACY REFILLS", INK["green"], 38)
+    text(d, (80, 374), "RECALL NOTIFICATIONS", INK["green"], 38)
     text(d, (80, 426),
-         "unify app + IVR  ->  ONE write\nto Rx Hub  (stop double refills)",
+         "unify app + IVR  ->  ONE write\nto RecallHub  (stop double notices)",
          INK["black"], 30)
     text(d, (600, 370), "P1", INK["red"], 40)
 
     sketch_box(d, (60, 560, 690, 720), INK["violet"], 4)
-    text(d, (80, 574), "SEARCH FIX", INK["violet"], 38)
+    text(d, (80, 574), "NAV SEARCH FIX", INK["violet"], 38)
     text(d, (80, 626),
-         "hide OUT-OF-STOCK items\nper store  (stop dead ends)",
+         "hide UNAVAILABLE chargers\nper region  (stop dead ends)",
          INK["black"], 30)
     text(d, (600, 570), "P2", INK["green"], 36)
 
     # --- Right column: the offline-card ask + the BLOCKED note ---
     sketch_box(d, (820, 165, 1430, 300), INK["black"], 4)
-    text(d, (840, 182), "Can we do CARD sales", INK["black"], 34)
-    text(d, (840, 226), "offline too??", INK["black"], 34)
+    text(d, (840, 182), "Can the app call the card", INK["black"], 34)
+    text(d, (840, 226), "processor directly??", INK["black"], 34)
 
     # BLOCKED sticky + arrow
     arrow(d, (1120, 305), (1120, 360), INK["red"], 5)
-    sticky(img, (840, 360), "X  BLOCKED — PCI\nno card data stored\nlocally (wiki s.4)",
+    sticky(img, (840, 360), "X  BLOCKED — PCI\nmust use ConnectedPaymentGateway\n(wiki s.4)",
            (255, 138, 138, 255), sz=30, rot=-4)
     d = ImageDraw.Draw(img)  # refresh draw handle after composite
 
-    # Loyalty sticky
-    sticky(img, (1140, 360), "Loyalty:\ntier progress bar\npts -> next tier",
+    # Connected-services renewal sticky
+    sticky(img, (1140, 360), "Renewal:\ntier progress bar\ndays -> next renewal",
            (255, 226, 120, 255), sz=30, rot=3)
     d = ImageDraw.Draw(img)
 
@@ -142,7 +143,7 @@ def main() -> int:
     sketch_box(d, (820, 620, 1430, 760), INK["black"], 3)
     text(d, (840, 632), "PARKING LOT (later)", INK["black"], 30)
     text(d, (840, 678),
-         "- vendor portal redesign\n- self-checkout pilot",
+         "- dealer portal redesign\n- remote-unlock pilot",
          INK["black"], 27)
 
     # footer scribble

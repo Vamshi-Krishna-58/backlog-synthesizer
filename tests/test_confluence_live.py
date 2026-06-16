@@ -93,7 +93,7 @@ def test_strip_storage_format_unwraps_basic_tags():
 def test_strip_storage_format_decodes_html_entities():
     """The previous bug was that `&mdash;` showed up as literal text. The
     fix routes through `html.unescape`."""
-    body = "<p>NorthStar Retail &mdash; Architecture</p><p>You &amp; me</p>"
+    body = "<p>Meridian Motors &mdash; Architecture</p><p>You &amp; me</p>"
     out = _strip_confluence_storage_format(body)
     assert "&mdash;" not in out
     assert "—" in out

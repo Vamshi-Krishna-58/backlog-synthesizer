@@ -4,19 +4,19 @@
 
   "required_topics": [
     {
-      "theme_keywords": ["in stock", "badge"],
+      "theme_keywords": ["charger", "availability", "badge"],
       "must_appear": true,
-      "rationale": "Search/inventory accuracy is the first escalation."
+      "rationale": "EV charger availability accuracy is the first escalation."
     },
     {
-      "theme_keywords": ["loyalty", "tier"],
+      "theme_keywords": ["connected services", "trial", "expiry"],
       "must_appear": true,
-      "rationale": "Loyalty downgrade emails — second escalation."
+      "rationale": "Connected-services trial expiry notifications — second escalation."
     },
     {
-      "theme_keywords": ["pos", "offline"],
+      "theme_keywords": ["dealer portal", "sso"],
       "must_appear": true,
-      "rationale": "POS offline cash fallback — third escalation."
+      "rationale": "Dealer portal SAML SSO — third escalation."
     }
   ],
 
@@ -24,22 +24,22 @@
 
   "expected_duplicates": [
     {
-      "story_theme": ["stock", "badge"],
-      "existing_id": "NS-412",
+      "story_theme": ["charger", "badge"],
+      "existing_id": "AD-412",
       "min_confidence": "medium",
-      "rationale": "NS-412 is the in-stock badge accuracy ticket."
+      "rationale": "AD-412 is the 'Available Now' EV-charger availability badge ticket."
     },
     {
-      "story_theme": ["loyalty", "tier"],
-      "existing_id": "NS-389",
+      "story_theme": ["connected services", "trial", "expiry"],
+      "existing_id": "AD-389",
       "min_confidence": "medium",
-      "rationale": "NS-389 is the loyalty downgrade email ticket."
+      "rationale": "AD-389 is the connected-services trial expiry notification ticket."
     },
     {
-      "story_theme": ["pos", "offline"],
-      "existing_id": "NS-101",
+      "story_theme": ["dealer portal", "sso"],
+      "existing_id": "AD-301",
       "min_confidence": "medium",
-      "rationale": "NS-101 is the POS offline cash sales ticket."
+      "rationale": "AD-301 is the dealer portal SAML SSO ticket."
     }
   ],
 

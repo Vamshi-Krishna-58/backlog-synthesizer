@@ -1,17 +1,17 @@
 {
   "case_id": "case_07",
-  "description": "Every requested capability touches the PCI constraints. The Gap Detector should flag at least the card-offline conflict; ideally the returns and gift-card conflicts as well.",
+  "description": "Every requested capability touches an architecture constraint. The Gap Detector should flag at least the direct card-processor and unsigned-OTA conflicts; ideally the ADAS auto-rollback and sub-30s telemetry polling conflicts as well.",
 
   "required_topics": [
     {
-      "theme_keywords": ["offline", "card"],
+      "theme_keywords": ["card processor", "payment", "direct"],
       "must_appear": true,
-      "rationale": "Offline card sales — the primary ask."
+      "rationale": "Direct card-processor calls from the app — the primary ask."
     },
     {
-      "theme_keywords": ["offline", "return"],
+      "theme_keywords": ["unsigned", "ota", "hotfix"],
       "must_appear": true,
-      "rationale": "Offline returns — the second ask."
+      "rationale": "Unsigned OTA hotfix — the second ask."
     }
   ],
 
@@ -21,9 +21,14 @@
 
   "expected_constraint_conflicts": [
     {
-      "story_keywords": ["card", "offline"],
+      "story_keywords": ["card processor", "direct", "payment"],
       "max_severity": "high",
-      "rationale": "Card-offline is explicitly FORBIDDEN by Section 4 of the wiki."
+      "rationale": "Direct calls to card processors are FORBIDDEN under Section 2 of the wiki; all payment must go through the ConnectedPaymentGateway (PCI)."
+    },
+    {
+      "story_keywords": ["unsigned", "ota"],
+      "max_severity": "high",
+      "rationale": "OTA packages must be cryptographically signed by the Meridian Code Signing Authority; unsigned/self-signed packages are rejected at the TCU (UNECE WP.29 / ISO 21434)."
     }
   ],
 

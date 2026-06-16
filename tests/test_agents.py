@@ -101,11 +101,11 @@ def test_parser_agent_writes_topics_and_summary(memory, audit):
     from agents.parser_agent import ParserAgent
 
     fake = FakeClaudeTool({
-        "summary": "Meeting covered POS resilience and loyalty.",
+        "summary": "Meeting covered telematics resilience and connected services.",
         "topics": [
-            {"theme": "pos-offline", "summary": "POS offline mode",
-             "raw_quote": "WAN drops", "speaker": "Hiroshi", "sentiment": "concern"},
-            {"theme": "loyalty-confusion", "summary": "Tier rules unclear",
+            {"theme": "telematics-offline", "summary": "Telematics offline mode",
+             "raw_quote": "signal drops", "speaker": "Kenji", "sentiment": "concern"},
+            {"theme": "connected-services-confusion", "summary": "Renewal rules unclear",
              "raw_quote": "downgraded with no warning", "speaker": "Priya", "sentiment": "concern"},
         ],
     })
@@ -119,7 +119,7 @@ def test_parser_agent_writes_topics_and_summary(memory, audit):
     assert topics[0]["id"] == "T-01"
     assert topics[1]["id"] == "T-02"
     # Summary written
-    assert memory.get("summary") == "Meeting covered POS resilience and loyalty."
+    assert memory.get("summary") == "Meeting covered telematics resilience and connected services."
     # Claude called exactly once
     assert len(fake.calls) == 1
     # Audit log has started + completed events for this agent
@@ -154,7 +154,7 @@ def test_constraint_agent_writes_constraints(memory, audit):
             {"severity": "forbidden", "category": "compliance",
              "statement": "Card sales offline are forbidden",
              "source_excerpt": "PCI is specific about online auth",
-             "applies_to": ["pos"]},
+             "applies_to": ["telematics"]},
         ],
     })
     agent = ConstraintAgent(claude=fake, confluence=FakeConfluence(), memory=memory, audit=audit)
@@ -189,8 +189,8 @@ def test_story_writer_agent_writes_stories_with_acceptance_criteria(memory, audi
 
     # Story writer reads `topics` and `constraints` from memory
     memory.put("topics", [
-        {"id": "T-01", "theme": "pos-offline", "summary": "POS offline mode",
-         "raw_quote": "WAN drops"},
+        {"id": "T-01", "theme": "telematics-offline", "summary": "Telematics offline mode",
+         "raw_quote": "signal drops"},
     ])
     memory.put("constraints", [])  # empty constraints list is valid
 
@@ -198,16 +198,16 @@ def test_story_writer_agent_writes_stories_with_acceptance_criteria(memory, audi
         "stories": [
             {
                 "id": "ST-01",
-                "title": "Enable cash sales offline at POS",
-                "description": "Lane falls back to local SQLite cache.",
-                "user_story": "As a cashier, I want to ring cash offline, so customers aren't turned away.",
+                "title": "Enable offline trip logging on the head unit",
+                "description": "Head unit falls back to local cache.",
+                "user_story": "As a driver, I want trips logged offline, so history isn't lost.",
                 "acceptance_criteria": [
-                    "Given WAN unreachable, when cash sale is rung, then it completes from cache.",
-                    "Given WAN returns, when sync runs, then offline transactions reconcile.",
+                    "Given the vehicle is offline, when a trip is logged, then it completes from cache.",
+                    "Given connectivity returns, when sync runs, then offline trips reconcile.",
                 ],
                 "priority": "High",
                 "priority_rationale": "Direct revenue loss.",
-                "tags": ["pos", "offline-mode"],
+                "tags": ["telematics", "offline-mode"],
                 "source_topic_id": "T-01",
                 "potential_constraint_conflicts": [],
             }
@@ -246,30 +246,30 @@ def test_epic_decomposer_agent_groups_stories_into_epics_with_tasks(memory, audi
     from agents.epic_decomposer_agent import EpicDecomposerAgent
 
     memory.put("stories", [
-        {"id": "ST-01", "title": "Cash sales offline at POS", "tags": ["pos", "offline"]},
-        {"id": "ST-02", "title": "Gift card redemption offline at POS", "tags": ["pos", "offline"]},
+        {"id": "ST-01", "title": "Offline trip logging", "tags": ["telematics", "offline"]},
+        {"id": "ST-02", "title": "Offline navigation in tunnels", "tags": ["navigation", "offline"]},
     ])
 
     fake = FakeClaudeTool({
         "epics": [
             {
                 "id": "EP-01",
-                "title": "POS Offline Resilience",
-                "description": "Keep the lane working when WAN drops.",
+                "title": "Connectivity Resilience",
+                "description": "Keep the head unit working when offline.",
                 "stories": [
                     {
                         "id": "ST-01",
-                        "title": "Cash sales offline at POS",
-                        "tags": ["pos", "offline"],
+                        "title": "Offline trip logging",
+                        "tags": ["telematics", "offline"],
                         "tasks": [
-                            {"id": "ST-01-TK-01", "title": "Embed SQLite on lane", "type": "infra"},
+                            {"id": "ST-01-TK-01", "title": "Embed local cache in head unit", "type": "infra"},
                             {"id": "ST-01-TK-02", "title": "Hourly sync job", "type": "backend"},
                         ],
                     },
                     {
                         "id": "ST-02",
-                        "title": "Gift card redemption offline at POS",
-                        "tags": ["pos", "offline"],
+                        "title": "Offline navigation in tunnels",
+                        "tags": ["telematics", "offline"],
                         "tasks": [
                             {"id": "ST-02-TK-01", "title": "Local balance cache schema", "type": "infra"},
                         ],
@@ -297,24 +297,24 @@ def test_gap_detector_writes_duplicates_conflicts_and_gaps(memory, audit):
     from agents.gap_detector_agent import GapDetectorAgent
 
     memory.put("stories", [
-        {"id": "ST-01", "title": "Loyalty tier progress UI",
-         "description": "Show the customer how close they are to next tier.",
-         "tags": ["loyalty", "mobile-app"]},
+        {"id": "ST-01", "title": "Connected-services renewal UI",
+         "description": "Show the owner when their subscription renews.",
+         "tags": ["connected-services", "companion-app"]},
     ])
     memory.put("constraints", [])
     memory.put("existing_tickets", [
-        {"id": "NS-389", "key": "NS-389", "title": "Loyalty tier downgrade email",
-         "summary": "Loyalty tier downgrade email", "description": "Clarify tier email."},
+        {"id": "AD-389", "key": "AD-389", "title": "Connected services trial expiry notification",
+         "summary": "Connected services trial expiry notification", "description": "Clarify renewal notification."},
     ])
 
     fake = FakeClaudeTool({
         "duplicates": [
-            {"story_id": "ST-01", "existing_id": "NS-389",
-             "confidence": "high", "reason": "Both address loyalty-tier transparency."},
+            {"story_id": "ST-01", "existing_id": "AD-389",
+             "confidence": "high", "reason": "Both address connected-services renewal transparency."},
         ],
         "conflicts": [],
         "gaps": [
-            {"title": "Tier-progress server-side computation missing",
+            {"title": "Renewal-date server-side computation missing",
              "description": "Stories assume the API exists but no story creates it.",
              "evidence": "No story covers the API contract."},
         ],
@@ -331,7 +331,7 @@ def test_gap_detector_writes_duplicates_conflicts_and_gaps(memory, audit):
     )
     agent.run()
 
-    assert memory.get("duplicates")[0]["existing_id"] == "NS-389"
+    assert memory.get("duplicates")[0]["existing_id"] == "AD-389"
     assert memory.get("conflicts") == []
     assert len(memory.get("gaps")) == 1
 

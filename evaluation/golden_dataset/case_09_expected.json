@@ -1,12 +1,12 @@
 {
   "case_id": "case_09",
-  "description": "Multi-team transcript — should produce 4 concrete stories (self-checkout perf, Android deep links, double pharmacy reminders, RN upgrade discussion) and flag the loyalty tier as a duplicate of NS-389.",
+  "description": "Multi-team transcript — should produce concrete stories (dealer portal perf, Android deep links, duplicate telematics trip events, infotainment OS upgrade discussion) and flag the connected-services trial expiry as a duplicate of AD-389.",
 
   "required_topics": [
     {
-      "theme_keywords": ["self-checkout", "latency"],
+      "theme_keywords": ["dealer portal", "latency"],
       "must_appear": true,
-      "rationale": "Store Ops's primary concern."
+      "rationale": "Dealer Tech's primary concern — slow service-history view on the diagnostic tablet."
     },
     {
       "theme_keywords": ["android", "deep link"],
@@ -14,9 +14,9 @@
       "rationale": "Mobile deep-link bug breaks marketing attribution."
     },
     {
-      "theme_keywords": ["pharmacy", "refill", "reminder"],
+      "theme_keywords": ["telematics", "duplicate", "trip"],
       "must_appear": true,
-      "rationale": "Double-firing reminder bug."
+      "rationale": "Double-firing telematics trip-event bug."
     }
   ],
 
@@ -24,8 +24,8 @@
 
   "expected_duplicates": [
     {
-      "story_theme": ["loyalty", "tier"],
-      "existing_id": "NS-389",
+      "story_theme": ["connected services", "trial", "expiry"],
+      "existing_id": "AD-389",
       "min_confidence": "medium",
       "rationale": "Priya explicitly says this is the same ticket already in flight."
     }

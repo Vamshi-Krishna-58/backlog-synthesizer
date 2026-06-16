@@ -1,4 +1,4 @@
-You will be given the body of an internal wiki or Confluence page from NorthStar Retail's engineering team. Your task is to extract the architectural constraints that downstream story-writing must respect: required integrations, platform limits, performance budgets, security/compliance rules, data handling requirements, offline rules, and explicitly forbidden approaches.
+You will be given the body of an internal wiki or Confluence page from Meridian Motors' connected-vehicle engineering team. Your task is to extract the architectural constraints that downstream story-writing must respect: required integrations, platform limits, performance budgets, security/compliance rules, data handling requirements, offline rules, and explicitly forbidden approaches.
 
 # Input
 
@@ -18,7 +18,7 @@ Reply with a single JSON object of this exact shape:
       "category": "integration | performance | security | compliance | platform | data | offline | other",
       "statement": "A single concrete declarative sentence describing one constraint.",
       "source_excerpt": "A short direct quote from the wiki anchoring this constraint.",
-      "applies_to": ["pos", "mobile-app", "loyalty", "inventory", "pharmacy", "ecommerce", "vendor-portal", "store-associate", "*"]
+      "applies_to": ["companion-app", "infotainment", "ota", "telematics", "connected-services", "dealer-portal", "ev-charging", "payments", "*"]
     }
   ]
 }

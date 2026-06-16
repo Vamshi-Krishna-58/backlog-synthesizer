@@ -1,17 +1,17 @@
 {
   "case_id": "case_02",
-  "description": "Hand-curated expectations for the pharmacy refill escalation. Values are constraints the synthesis must satisfy, not exact outputs.",
+  "description": "Hand-curated expectations for the recall & service notification escalation. Values are constraints the synthesis must satisfy, not exact outputs.",
 
   "required_topics": [
     {
-      "theme_keywords": ["pharmacy", "refill", "notification"],
+      "theme_keywords": ["recall", "service", "notification"],
       "must_appear": true,
-      "rationale": "Problem 1 of the meeting was a proactive refill-ready notification. Must be picked up."
+      "rationale": "Problem 1 of the meeting was a proactive recall/service-action notification. Must be picked up."
     },
     {
-      "theme_keywords": ["patient", "household", "account"],
+      "theme_keywords": ["owner", "scoped", "delivery"],
       "must_appear": true,
-      "rationale": "Problem 2 was patient-scoped delivery so notifications don't go to the wrong household member."
+      "rationale": "Problem 2 was owner-scoped (VIS) delivery so notifications don't go to the wrong driver on a shared vehicle account."
     }
   ],
 
@@ -22,26 +22,26 @@
       "rationale": "Voice-call reminders were explicitly declined in the meeting."
     },
     {
-      "theme_keywords": ["smartwatch", "wearable"],
+      "theme_keywords": ["infotainment lock screen", "lock-screen recall"],
       "must_not_appear": true,
-      "rationale": "Smartwatch app was explicitly declined."
+      "rationale": "Recall notifications on the infotainment lock screen were explicitly declined."
     }
   ],
 
   "expected_duplicates": [
     {
-      "story_theme": ["sms", "refill", "reminder"],
-      "existing_id": "NS-176",
+      "story_theme": ["sms", "service", "notification"],
+      "existing_id": "AD-176",
       "min_confidence": "medium",
-      "rationale": "NS-176 is the in-backlog SMS reminder ticket and was explicitly called out in the meeting as the existing work — any new SMS-refill story should be flagged as a duplicate."
+      "rationale": "AD-176 is the in-backlog warranty/service push-notification ticket carrying the SMS fallback scope, explicitly called out in the meeting as the existing work — any new SMS-notification story should be flagged as a duplicate."
     }
   ],
 
   "expected_constraint_conflicts": [
     {
-      "story_keywords": ["medication", "name", "notification", "push"],
+      "story_keywords": ["recall code", "defect", "notification", "push"],
       "max_severity": "high",
-      "rationale": "Surfacing a medication name in a push notification requires explicit patient opt-in, verified delivery, and audit log per HIPAA Section 3 of architecture_constraints.md. Any story that proposes shipping medication-named notifications without those guardrails should be flagged."
+      "rationale": "Surfacing a specific defect/recall code in a push notification requires explicit owner consent, verified contact method, and a 7-year audit log per the GDPR/CCPA rules in Section 3 of architecture_constraints.md. Any story that proposes shipping recall-code notifications without those guardrails should be flagged."
     }
   ],
 

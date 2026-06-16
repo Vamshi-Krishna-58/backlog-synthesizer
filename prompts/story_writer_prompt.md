@@ -24,7 +24,7 @@ Reply with a single JSON object of this exact shape:
       ],
       "priority": "High | Medium | Low",
       "priority_rationale": "A concrete non-empty sentence explaining the priority based on customer impact, revenue, compliance, release dependency, support load, operational risk, or similar evidence.",
-      "tags": ["pos", "offline-mode"],
+      "tags": ["telematics", "offline-mode"],
       "source_topic_id": "T-01",
       "potential_constraint_conflicts": ["C-01"]
     }
@@ -40,7 +40,7 @@ Reply with a single JSON object of this exact shape:
 - `acceptance_criteria`: 2-5 testable, externally observable acceptance criteria in Given/When/Then form.
 - `priority`: `High`, `Medium`, or `Low`.
 - `priority_rationale`: Required. A concrete explanation for why the story has this priority.
-- `tags`: Use canonical NorthStar Retail tags whenever applicable.
+- `tags`: Use canonical Meridian Motors tags whenever applicable.
 - `source_topic_id`: The id of the topic from the Parser output that this story addresses. This must exactly match an `id` field in the topics input above (e.g. `"T-01"`, `"T-02"`). **Never use `"..."`, `"null"`, `""`, or any placeholder.** If you are unsure which topic a story addresses, pick the closest one by theme.
 - `potential_constraint_conflicts`: Array of relevant constraint ids if this story may contradict a `must` or `forbidden` constraint; otherwise `[]`.
 
@@ -58,11 +58,11 @@ Note: you do **not** produce an `evidence` field. An evidence block is attached 
 7. Acceptance criteria must be testable, externally observable, and written in Given/When/Then form. Provide 2-5 acceptance criteria per story. Avoid vague outcomes and avoid implementation details unless the topic or a constraint explicitly requires them.
 8. `priority_rationale` must always be a concrete, non-empty sentence. Empty strings, "TBD", or vague phrases like "important" are not allowed.
 9. Use these priority definitions:
-   - `High` = blocks customers, store operations, compliance obligations, a revenue-critical flow, or a committed release
+   - `High` = blocks vehicle owners or drivers, dealer/service operations, vehicle safety, compliance obligations, a revenue-critical flow, or a committed release
    - `Medium` = valuable and meaningful, but not currently blocking
    - `Low` = polish, convenience, or lower-impact improvement
-10. Tags should use the canonical NorthStar Retail set whenever applicable:
-   `pos`, `mobile-app`, `ecommerce`, `loyalty`, `inventory`, `pharmacy`, `vendor-portal`, `store-associate`, `analytics`, `payments`, `offline-mode`, `accessibility`, `performance`, `security`, `compliance`
+10. Tags should use the canonical Meridian Motors set whenever applicable:
+   `companion-app`, `infotainment`, `ota`, `telematics`, `connected-services`, `dealer-portal`, `ev-charging`, `navigation`, `remote-commands`, `fleet`, `payments`, `offline-mode`, `accessibility`, `performance`, `security`, `compliance`
    Add new tags only when none of these fit.
 11. Mark a constraint in `potential_constraint_conflicts` only when the drafted capability plausibly contradicts, bypasses, weakens, or would require an exception to that constraint.
 12. Assign sequential ids in the form `ST-01`, `ST-02`, etc., in the order you emit the stories.
@@ -72,7 +72,7 @@ Note: you do **not** produce an `evidence` field. An evidence block is attached 
 
 # Worked example (illustrative — do not copy its content)
 
-Suppose the topics are three requested-but-blocked offline capabilities, and the constraints include `C-02` (forbidden: card sales must stay online-only per PCI).
+Suppose the topics are three requested-but-blocked capabilities, and the constraints include `C-02` (forbidden: all payments must go through ConnectedPaymentGateway — direct calls to card processors are not allowed, per PCI).
 
 Correct output: **three stories**, one per topic, each with the relevant constraint id in `potential_constraint_conflicts` and the conflict called out in `description` — for example:
 
@@ -80,16 +80,16 @@ Correct output: **three stories**, one per topic, each with the relevant constra
   "stories": [
     {
       "id": "ST-01",
-      "title": "Enable offline card sales at the POS",
-      "description": "Store Ops requested queuing card transactions during WAN outages and posting them when connectivity returns. This conflicts with C-02 (PCI — card sales must remain online-only); drafted so the conflict is visible to reviewers rather than dropped.",
-      "user_story": "As a store associate, I want to complete card sales during a WAN outage, so that we don't lose sales in rural lanes.",
+      "title": "Call the card processor directly from the companion app",
+      "description": "Connected Services requested calling the card processor directly from the app to shave a hop off subscription checkout. This conflicts with C-02 (PCI — all payments must go through ConnectedPaymentGateway); drafted so the conflict is visible to reviewers rather than dropped.",
+      "user_story": "As a vehicle owner, I want faster subscription checkout, so that renewing connected services is quick.",
       "acceptance_criteria": [
-        "Given a WAN outage, when an associate attempts a card sale, then the system either completes it within PCI rules or clearly explains why it cannot.",
-        "Given connectivity is restored, when queued transactions exist, then each is reconciled exactly once with an audit record."
+        "Given a subscription purchase, when payment is initiated, then it is authorized within PCI rules or the system clearly explains why it cannot.",
+        "Given a completed payment, when the receipt is issued, then it is reconciled exactly once with an audit record."
       ],
       "priority": "High",
-      "priority_rationale": "Store Ops reports total sales loss during weekly WAN outages in rural lanes.",
-      "tags": ["pos", "offline-mode", "payments", "compliance"],
+      "priority_rationale": "Connected Services reports subscription checkout drop-off and wants a faster path.",
+      "tags": ["connected-services", "payments", "compliance"],
       "source_topic_id": "T-01",
       "potential_constraint_conflicts": ["C-02"]
     }

@@ -62,21 +62,21 @@ def test_orchestrator_end_to_end_with_mocks():
         "extract the distinct topics": {
             "summary": "Two themes discussed.",
             "topics": [
-                {"theme": "pos-offline", "summary": "POS goes offline when WAN drops",
-                 "raw_quote": "cashiers couldn't ring up customers", "speaker": "Hiroshi",
+                {"theme": "telematics-offline", "summary": "Trip logging drops when the TCU loses signal",
+                 "raw_quote": "drivers lost trip history in the garage", "speaker": "Kenji",
                  "sentiment": "concern"},
-                {"theme": "loyalty-tier-confusion", "summary": "Tier rules opaque",
-                 "raw_quote": "you've been downgraded", "speaker": "Priya",
+                {"theme": "connected-services-confusion", "summary": "Trial expiry rules opaque",
+                 "raw_quote": "owners are surprised their trial ended", "speaker": "Sarah",
                  "sentiment": "concern"},
             ],
         },
         # Constraint extractor
         "extract the architectural constraints": {
             "constraints": [
-                {"severity": "must", "category": "offline", "statement": "POS must support cash sales offline",
-                 "source_excerpt": "cash sales when WAN is down", "applies_to": ["pos"]},
-                {"severity": "forbidden", "category": "compliance", "statement": "Card sales offline are forbidden",
-                 "source_excerpt": "card sales when WAN is down: FORBIDDEN", "applies_to": ["pos"]},
+                {"severity": "must", "category": "offline", "statement": "Head unit must log trips offline",
+                 "source_excerpt": "trip logging when the TCU is offline", "applies_to": ["telematics"]},
+                {"severity": "forbidden", "category": "compliance", "statement": "Direct calls to card processors are forbidden",
+                 "source_excerpt": "payments must go through ConnectedPaymentGateway: direct calls FORBIDDEN", "applies_to": ["payments"]},
             ],
         },
         # Story writer
@@ -84,30 +84,30 @@ def test_orchestrator_end_to_end_with_mocks():
             "stories": [
                 {
                     "id": "ST-01",
-                    "title": "Enable cash sales when WAN is down at POS",
-                    "description": "Lane falls back to local SQLite when offline.",
-                    "user_story": "As a cashier, I want to process cash sales offline, so that I can keep checking customers out during outages.",
+                    "title": "Enable offline trip logging when the TCU loses signal",
+                    "description": "Head unit falls back to local storage when offline.",
+                    "user_story": "As a driver, I want trips logged offline, so that I keep my trip history during connectivity gaps.",
                     "acceptance_criteria": [
-                        "Given WAN is unreachable, when a cash sale is rung up, then it completes from local cache.",
-                        "Given WAN returns online, when next sync runs, then offline transactions reconcile.",
+                        "Given the vehicle is offline, when a trip is logged, then it completes from local storage.",
+                        "Given connectivity returns, when next sync runs, then offline trips reconcile.",
                     ],
                     "priority": "High",
-                    "priority_rationale": "Direct customer-facing revenue loss during outages.",
-                    "tags": ["pos", "offline-mode"],
+                    "priority_rationale": "Drivers lose trip history during connectivity gaps.",
+                    "tags": ["telematics", "offline-mode"],
                     "source_topic_id": "T-01",
                     "potential_constraint_conflicts": [],
                 },
                 {
                     "id": "ST-02",
-                    "title": "Show loyalty tier progress in mobile app",
-                    "description": "Make tier rules visible.",
-                    "user_story": "As a loyalty member, I want a tier progress view, so that I understand how I keep my tier.",
+                    "title": "Show connected-services renewal date in vehicle status",
+                    "description": "Make trial/renewal dates visible.",
+                    "user_story": "As a vehicle owner, I want a renewal-date view, so that I understand when my subscription ends.",
                     "acceptance_criteria": [
-                        "Given I'm on the account screen, when I view tier progress, then I see points to next tier.",
+                        "Given I'm on the vehicle status screen, when I view my subscription, then I see the renewal date.",
                     ],
                     "priority": "Medium",
-                    "priority_rationale": "Cuts support contact volume; not customer-blocking.",
-                    "tags": ["loyalty", "mobile-app"],
+                    "priority_rationale": "Cuts support contact volume; not owner-blocking.",
+                    "tags": ["connected-services", "companion-app"],
                     "source_topic_id": "T-02",
                     "potential_constraint_conflicts": [],
                 },
@@ -118,20 +118,20 @@ def test_orchestrator_end_to_end_with_mocks():
             "epics": [
                 {
                     "id": "EP-01",
-                    "title": "POS Offline Resilience",
-                    "description": "Make the lane operable during WAN outages.",
+                    "title": "Connectivity Resilience",
+                    "description": "Keep the head unit operable during connectivity loss.",
                     "stories": [
                         {
                             "id": "ST-01",
-                            "title": "Enable cash sales when WAN is down at POS",
-                            "description": "Lane falls back to local SQLite when offline.",
-                            "user_story": "As a cashier...",
-                            "acceptance_criteria": ["Given WAN..."],
+                            "title": "Enable offline trip logging when the TCU loses signal",
+                            "description": "Head unit falls back to local storage when offline.",
+                            "user_story": "As a driver...",
+                            "acceptance_criteria": ["Given offline..."],
                             "priority": "High",
-                            "tags": ["pos", "offline-mode"],
+                            "tags": ["telematics", "offline-mode"],
                             "tasks": [
-                                {"id": "ST-01-TK-01", "title": "Embed SQLite on lane", "type": "infra"},
-                                {"id": "ST-01-TK-02", "title": "Implement hourly sync", "type": "backend"},
+                                {"id": "ST-01-TK-01", "title": "Embed local trip store in head unit", "type": "infra"},
+                                {"id": "ST-01-TK-02", "title": "Implement reconnect sync", "type": "backend"},
                                 {"id": "ST-01-TK-03", "title": "QA — offline soak test", "type": "qa"},
                             ],
                         },
@@ -139,20 +139,20 @@ def test_orchestrator_end_to_end_with_mocks():
                 },
                 {
                     "id": "EP-02",
-                    "title": "Loyalty Transparency",
-                    "description": "Make tier rules legible.",
+                    "title": "Connected Services Transparency",
+                    "description": "Make trial/renewal dates legible.",
                     "stories": [
                         {
                             "id": "ST-02",
-                            "title": "Show loyalty tier progress in mobile app",
-                            "description": "Make tier rules visible.",
-                            "user_story": "As a loyalty member...",
+                            "title": "Show connected-services renewal date in vehicle status",
+                            "description": "Make renewal dates visible.",
+                            "user_story": "As a vehicle owner...",
                             "acceptance_criteria": ["Given I'm on..."],
                             "priority": "Medium",
-                            "tags": ["loyalty", "mobile-app"],
+                            "tags": ["connected-services", "companion-app"],
                             "tasks": [
-                                {"id": "ST-02-TK-01", "title": "Design tier progress component", "type": "frontend"},
-                                {"id": "ST-02-TK-02", "title": "Wire loyalty API for tier data", "type": "backend"},
+                                {"id": "ST-02-TK-01", "title": "Design renewal-date component", "type": "frontend"},
+                                {"id": "ST-02-TK-02", "title": "Wire connected-services API for renewal data", "type": "backend"},
                                 {"id": "ST-02-TK-03", "title": "Add UX copy and tests", "type": "qa"},
                             ],
                         },
@@ -165,17 +165,17 @@ def test_orchestrator_end_to_end_with_mocks():
             "duplicates": [
                 {
                     "story_id": "ST-02",
-                    "existing_id": "NS-389",
+                    "existing_id": "AD-389",
                     "confidence": "high",
-                    "reason": "Both address loyalty tier downgrade confusion.",
+                    "reason": "Both address connected-services trial/renewal confusion.",
                 },
             ],
             "conflicts": [],
             "gaps": [
                 {
-                    "title": "WAN-failure detection trigger",
+                    "title": "Connectivity-loss detection trigger",
                     "description": "Stories assume offline mode kicks in, but no story defines when/how.",
-                    "evidence": "Cashier flow assumes the lane already knows it's offline.",
+                    "evidence": "Driver flow assumes the head unit already knows it's offline.",
                 },
             ],
         },
@@ -194,7 +194,7 @@ def test_orchestrator_end_to_end_with_mocks():
         transcript_text="(transcript content, doesn't matter — Claude is mocked)",
         constraint_text="(constraint content)",
         existing_tickets=[
-            {"id": "NS-389", "title": "Loyalty tier downgrade email", "description": "Improve email."},
+            {"id": "AD-389", "title": "Connected services trial expiry notification", "description": "Improve notification."},
         ],
         use_embeddings_for_duplicates=False,
     )
@@ -216,7 +216,7 @@ def test_orchestrator_end_to_end_with_mocks():
 
     # Gap detector outputs
     assert len(result["duplicates"]) == 1
-    assert result["duplicates"][0]["existing_id"] == "NS-389"
+    assert result["duplicates"][0]["existing_id"] == "AD-389"
     assert len(result["gaps"]) == 1
 
     # Audit trail rendered as markdown
@@ -265,19 +265,19 @@ def test_output_formatter_renders_epic_hierarchy(tmp_path):
         "epics": [
             {
                 "id": "EP-01",
-                "title": "POS Offline Resilience",
-                "description": "Lane must survive WAN drops.",
+                "title": "Connectivity Resilience",
+                "description": "Head unit must survive connectivity drops.",
                 "stories": [
                     {
                         "id": "ST-01",
-                        "title": "Cash sales offline at POS",
-                        "description": "Local SQLite cache.",
-                        "user_story": "As a cashier, I want to ring cash offline.",
+                        "title": "Offline trip logging",
+                        "description": "Local trip store on the head unit.",
+                        "user_story": "As a driver, I want trips logged offline.",
                         "acceptance_criteria": ["Given X, when Y, then Z."],
                         "priority": "High",
-                        "tags": ["pos", "offline-mode"],
+                        "tags": ["telematics", "offline-mode"],
                         "tasks": [
-                            {"id": "TK-01", "title": "Embed SQLite on lane", "type": "infra"},
+                            {"id": "TK-01", "title": "Embed local trip store in head unit", "type": "infra"},
                         ],
                     }
                 ],
@@ -290,7 +290,7 @@ def test_output_formatter_renders_epic_hierarchy(tmp_path):
     json_path, md_path = write_outputs(result, tmp_path)
     md = md_path.read_text()
     assert "# Backlog Synthesis" in md
-    assert "Epic 1: POS Offline Resilience" in md
-    assert "1.1 Cash sales offline at POS" in md
-    assert "Embed SQLite on lane" in md
-    assert "`pos`" in md
+    assert "Epic 1: Connectivity Resilience" in md
+    assert "1.1 Offline trip logging" in md
+    assert "Embed local trip store in head unit" in md
+    assert "`telematics`" in md

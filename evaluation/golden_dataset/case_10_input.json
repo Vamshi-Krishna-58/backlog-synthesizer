@@ -1,6 +1,6 @@
 {
   "case_id": "case_10",
-  "description": "Compliance-driven transcript. Three findings — HIPAA, GDPR, PCI — each becomes a story. None should be flagged as a duplicate (these are new) and all should carry compliance tags.",
+  "description": "Compliance-driven transcript. Three findings — UNECE WP.29 cybersecurity attestation, GDPR EU data residency, PCI tokenization — each becomes a new story. None should be flagged as a duplicate (these are new) and all should carry compliance significance.",
   "transcript_path": "evaluation/golden_dataset/transcripts/case_10_compliance.txt",
   "constraints_path": "samples/architecture_constraints.md",
   "backlog_path": "samples/jira_backlog.json"

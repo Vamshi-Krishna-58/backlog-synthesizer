@@ -4,19 +4,19 @@
 
   "required_topics": [
     {
-      "theme_keywords": ["hipaa", "pharmacy"],
+      "theme_keywords": ["unece", "wp.29", "cybersecurity", "attestation"],
       "must_appear": true,
-      "rationale": "HIPAA finding on pharmacy refill notifications."
+      "rationale": "UNECE WP.29 / ISO 21434 cybersecurity attestation finding on the OTA pipeline."
     },
     {
-      "theme_keywords": ["gdpr", "loyalty", "consent"],
+      "theme_keywords": ["gdpr", "eu", "data residency"],
       "must_appear": true,
-      "rationale": "GDPR finding on marketing exports of loyalty data."
+      "rationale": "GDPR finding on EU owner PII being replicated cross-region."
     },
     {
-      "theme_keywords": ["pci", "receipt", "expiry"],
+      "theme_keywords": ["pci", "receipt", "tokenization"],
       "must_appear": true,
-      "rationale": "PCI finding on receipt expiry-month leakage."
+      "rationale": "PCI finding on receipt expiry-month leakage and raw card reference storage."
     }
   ],
 

@@ -1,12 +1,12 @@
 {
   "case_id": "case_08",
-  "description": "Ambiguity / conservatism test. Only the mobile-checkout perf signal is concrete enough to become a story. Other hedges ('the vibes are off', 'more rewarding loyalty') must NOT become stories.",
+  "description": "Ambiguity / conservatism test. Only the companion-app/infotainment performance signal is concrete enough to become a story. Other hedges ('the vibes are off', 'more rewarding connected services') must NOT become stories.",
 
   "required_topics": [
     {
-      "theme_keywords": ["mobile", "checkout"],
+      "theme_keywords": ["companion app", "performance"],
       "must_appear": true,
-      "rationale": "The single hedged-but-concrete signal in the transcript."
+      "rationale": "The single hedged-but-concrete signal in the transcript — the app/infotainment feeling slow."
     }
   ],
 
@@ -17,7 +17,7 @@
       "rationale": "Pure vibes feedback is not a backlog item."
     },
     {
-      "theme_keywords": ["more discounts"],
+      "theme_keywords": ["more free charging"],
       "must_not_appear": true,
       "rationale": "Marketing wish, not an engineering ask."
     }

@@ -33,12 +33,12 @@ from guardrails import (  # noqa: E402
 def _story(
     *,
     id_="ST-01",
-    title="Enable offline cash sales at POS",
-    description="Lane falls back to local SQLite when offline.",
-    user_story="As a cashier, I want to process cash sales offline.",
+    title="Enable offline trip logging when the TCU loses signal",
+    description="Head unit falls back to local storage when the vehicle is offline.",
+    user_story="As a driver, I want trip data captured offline.",
     acceptance_criteria=None,
     priority="High",
-    priority_rationale="Direct customer-facing revenue loss during outages.",
+    priority_rationale="Drivers lose trip history during connectivity gaps.",
     tags=None,
     source_topic_id="T-01",
     evidence=None,
@@ -50,17 +50,17 @@ def _story(
         "description": description,
         "user_story": user_story,
         "acceptance_criteria": acceptance_criteria if acceptance_criteria is not None else [
-            "Given WAN is unreachable, when a cash sale is rung up, then it completes from local cache.",
-            "Given WAN returns online, when next sync runs, then offline transactions reconcile.",
+            "Given the vehicle has no connectivity, when a trip is logged, then it is stored locally.",
+            "Given connectivity returns, when the next sync runs, then offline trips reconcile.",
         ],
         "priority": priority,
         "priority_rationale": priority_rationale,
-        "tags": tags if tags is not None else ["pos", "offline-mode"],
+        "tags": tags if tags is not None else ["telematics", "offline-mode"],
         "source_topic_id": source_topic_id,
         "evidence": evidence if evidence is not None else [{
             "topic_id": "T-01",
-            "raw_quote": "cashiers couldn't ring up customers",
-            "speaker": "Hiroshi",
+            "raw_quote": "drivers lost trip history in the parking garage",
+            "speaker": "Kenji",
         }],
     }
 
@@ -69,11 +69,11 @@ def _synthesis(stories=None, topics=None):
     """Wrap a list of stories in the epic structure the guardrails read."""
     return {
         "topics": topics if topics is not None else [
-            {"id": "T-01", "theme": "pos-offline", "raw_quote": "..."},
+            {"id": "T-01", "theme": "telematics-offline", "raw_quote": "..."},
         ],
         "epics": [{
             "id": "EP-01",
-            "title": "POS Resilience",
+            "title": "Connectivity Resilience",
             "stories": stories or [_story()],
         }],
     }
@@ -135,7 +135,7 @@ def test_ac_count_too_high_fires_when_above_seven():
 def test_ac_missing_gwt_flags_prose_criteria():
     """AC without the given/when/then keywords gets the warn-level finding."""
     story = _story(acceptance_criteria=[
-        "Cashiers can complete sales while offline.",          # no GWT
+        "Drivers can use navigation while offline.",            # no GWT
         "Given network returns, when sync runs, then OK.",      # has GWT
     ])
     findings = run_guardrails(_synthesis([story]))
@@ -148,8 +148,8 @@ def test_ac_missing_gwt_flags_prose_criteria():
 
 def test_duplicate_title_flags_second_occurrence():
     """Two stories with the same title surface a duplicate_title finding."""
-    a = _story(id_="ST-01", title="Enable offline returns at the POS")
-    b = _story(id_="ST-02", title="Enable offline returns at the POS",
+    a = _story(id_="ST-01", title="Enable offline navigation in tunnels")
+    b = _story(id_="ST-02", title="Enable offline navigation in tunnels",
                source_topic_id="T-02",
                evidence=[{"topic_id": "T-02", "raw_quote": "..."}])
     findings = run_guardrails({
@@ -168,8 +168,8 @@ def test_duplicate_title_flags_second_occurrence():
 
 def test_duplicate_title_is_case_insensitive_and_trimmed():
     """`Foo` and `  foo  ` collide; whitespace and casing shouldn't hide it."""
-    a = _story(id_="ST-01", title="Enable POS Offline Mode")
-    b = _story(id_="ST-02", title="  enable pos offline mode  ",
+    a = _story(id_="ST-01", title="Enable Infotainment Offline Mode")
+    b = _story(id_="ST-02", title="  enable infotainment offline mode  ",
                source_topic_id="T-02",
                evidence=[{"topic_id": "T-02", "raw_quote": "..."}])
     findings = run_guardrails({
@@ -184,7 +184,7 @@ def test_duplicate_title_is_case_insensitive_and_trimmed():
 
 def test_non_canonical_tag_is_info_level():
     """Tags outside the canonical set surface as info, not error."""
-    story = _story(tags=["pos", "made-up-tag", "another-novel-tag"])
+    story = _story(tags=["telematics", "made-up-tag", "another-novel-tag"])
     findings = run_guardrails(_synthesis([story]))
     codes = _codes(findings)
     assert "non_canonical_tag" in codes
@@ -265,7 +265,7 @@ def test_kitchen_sink_synthesis_surfaces_every_check():
     """One story that violates every check at once — sanity-checks that
     findings combine cleanly without one masking another."""
     story = _story(
-        acceptance_criteria=["Cashiers can complete sales while offline."],  # missing GWT + count low
+        acceptance_criteria=["Drivers can use navigation while offline."],  # missing GWT + count low
         priority="High", priority_rationale="x",                              # weak rationale
         tags=["made-up-tag"],                                                  # non-canonical
         source_topic_id=None,                                                  # ungrounded

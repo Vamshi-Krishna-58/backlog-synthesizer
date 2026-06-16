@@ -95,7 +95,7 @@ def scenario_1():
     show("""
 Subject: Lunch tomorrow?
 Hey team — reminder that tomorrow's lunch is at the new ramen place on 4th Street.
-Reservation at 12:15 under NorthStar. Priya's birthday cake is in the kitchen after 2pm.
+Reservation at 12:15 under Meridian. Sarah's birthday cake is in the kitchen after 2pm.
 Someone left a yellow umbrella in conference room B. Lost & found is the front desk.
     """)
 
@@ -110,7 +110,7 @@ Story 3: "As a facilities manager, I want a lost & found system..."
     transcript = """
     Subject: Lunch tomorrow?
     Reminder lunch is at new ramen place 4th Street. Reservation 12:15.
-    Priya's birthday cake in kitchen after 2pm. Yellow umbrella in conference room B.
+    Sarah's birthday cake in kitchen after 2pm. Yellow umbrella in conference room B.
     """
     tool   = DemoFakeTool(topics=[], stories=[])
     result = run_pipeline(transcript, tool)
@@ -136,7 +136,7 @@ def scenario_2():
     show("""
 {
   "id": "ST-01",
-  "title": "Enable offline cash sales at POS during WAN outage",
+  "title": "Enable direct card-processor calls from the app during WAN outage",
   "source_topic_id": "...",       ← LLM used placeholder
   "evidence": []                  ← empty because source unknown
 }
@@ -153,15 +153,15 @@ Story shown to user with:
     label("WHAT THE SYSTEM DOES:")
     from agents.story_writer_agent import StoryWriterAgent
     topics = [
-        {"id": "T-01", "theme": "offline POS", "summary": "cash sales WAN outage",
-         "raw_quote": "we lose sales when the internet drops", "speaker": "Store Manager"},
-        {"id": "T-02", "theme": "loyalty points", "summary": "points not updating",
-         "raw_quote": "my points never show after purchase", "speaker": "Customer"},
+        {"id": "T-01", "theme": "offline payments", "summary": "card payments WAN outage",
+         "raw_quote": "we lose payments when the connection drops", "speaker": "Connected Services Lead"},
+        {"id": "T-02", "theme": "connected-services renewal", "summary": "renewals not updating",
+         "raw_quote": "my subscription never shows as renewed after payment", "speaker": "Owner"},
     ]
     topics_by_id = {t["id"]: t for t in topics}
     story = {
         "id": "ST-01",
-        "title": "Enable offline cash sales at POS during WAN outage",
+        "title": "Enable direct card-processor calls from the app during WAN outage",
         "source_topic_id": "...",
     }
     before = story["source_topic_id"]
@@ -173,7 +173,7 @@ Story shown to user with:
     show(f"""
 Step 1 — Repair:  source_topic_id  "{before}"  →  "{after}"
          Method: word-overlap between story title and topic summaries
-         "WAN outage" + "cash sales" matched T-01 (score: 4 words)
+         "connectivity loss" + "trip logging" matched T-01 (score: 4 words)
 
 Step 2 — Evidence attached (from topic, NOT from LLM):
          raw_quote: "{ev.get('raw_quote', '')}"
@@ -195,16 +195,16 @@ def scenario_3():
 
     label("VAGUE AC (hallucination risk — can't verify):")
     show("""
-✗ "The system should work reliably for cashiers."
+✗ "The system should work reliably for drivers."
 ✗ "Users should have a good experience."
 ✗ "Performance must be acceptable."
     """)
 
     label("TESTABLE AC (Given/When/Then — verifiable):")
     show("""
-✓ "Given the POS is offline, when a cash sale is submitted,
+✓ "Given the vehicle is offline, when a trip is logged,
    then it queues locally and shows a pending indicator."
-✓ "Given connectivity is restored, when queued transactions sync,
+✓ "Given connectivity is restored, when queued trips sync,
    then each posts exactly once with an audit record."
     """)
 
@@ -214,11 +214,11 @@ def scenario_3():
         "epics": [{"id": "EP-01", "title": "E", "stories": [{
             "id": "ST-01", "title": "Vague story", "source_topic_id": "T-01",
             "acceptance_criteria": [
-                "The system should work reliably for cashiers.",
+                "The system should work reliably for drivers.",
                 "Users should have a good experience.",
             ],
             "priority": "Medium", "priority_rationale": "Important.",
-            "tags": ["pos"], "evidence": [{"raw_quote": "real quote"}],
+            "tags": ["telematics"], "evidence": [{"raw_quote": "real quote"}],
         }]}],
     }
     findings_vague = run_guardrails(vague_synthesis)
@@ -229,11 +229,11 @@ def scenario_3():
         "epics": [{"id": "EP-01", "title": "E", "stories": [{
             "id": "ST-01", "title": "Clean story", "source_topic_id": "T-01",
             "acceptance_criteria": [
-                "Given the POS is offline, when a cash sale is submitted, then it queues.",
-                "Given connectivity restores, when queue syncs, then each sale posts once.",
+                "Given the vehicle is offline, when a trip is logged, then it queues.",
+                "Given connectivity restores, when queue syncs, then each trip posts once.",
             ],
-            "priority": "High", "priority_rationale": "Store ops reports sales loss.",
-            "tags": ["pos"], "evidence": [{"raw_quote": "we lose sales when internet drops"}],
+            "priority": "High", "priority_rationale": "Telematics ops reports trip data loss.",
+            "tags": ["telematics"], "evidence": [{"raw_quote": "we lose trips when connection drops"}],
         }]}],
     }
     findings_clean = run_guardrails(clean_synthesis)
@@ -260,16 +260,16 @@ def scenario_4():
     label("INPUT — Transcript with PII:")
     show("""
 Meeting Notes:
-James Wilson (j.wilson@northstar.com) reported that customer 555-867-5309
+James Wilson (j.wilson@meridianmotors.com) reported that owner 555-867-5309
 had their card 4532-1234-5678-9012 declined offline.
-SSN on file: 123-45-6789. The issue affects Store Associate Sarah Connor.
+SSN on file: 123-45-6789. The issue affects Dealer Advisor Sarah Connor.
     """)
 
     from redactor import redact, RedactionMap
     transcript = """
-    James Wilson (j.wilson@northstar.com) reported that customer 555-867-5309
+    James Wilson (j.wilson@meridianmotors.com) reported that owner 555-867-5309
     had their card 4532-1234-5678-9012 declined offline.
-    SSN on file: 123-45-6789. The issue affects Store Associate Sarah Connor.
+    SSN on file: 123-45-6789. The issue affects Dealer Advisor Sarah Connor.
     """
     rmap = RedactionMap()
     redacted, _ = redact(transcript, rmap=rmap)

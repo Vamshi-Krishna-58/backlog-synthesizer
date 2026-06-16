@@ -4,7 +4,7 @@ A multi-agent AI system that ingests customer meeting transcripts, architecture 
 
 Built as a demonstration of practical multi-agent AI engineering — bounded, testable, with persistent memory and an evaluation harness.
 
-The bundled sample data is themed around **NorthStar Retail**, a fictional national retail giant with ~2,000 stores spanning grocery, electronics, apparel, home goods, pharmacy, and auto service.
+The bundled sample data is themed around **Meridian Motors**, a fictional national automaker whose Connected Vehicle Platform spans the companion app, in-vehicle infotainment, over-the-air (OTA) updates, telematics, the dealer portal, connected-services subscriptions, EV charging/navigation, and fleet management.
 
 ---
 
@@ -25,10 +25,10 @@ Feed it any combination of these:
 
 Get back a structured synthesis:
 
-- **Epics** — high-level themes (e.g., "Loyalty Program Modernization")
+- **Epics** — high-level themes (e.g., "Connected Services Modernization")
 - **Stories** — user stories under each epic with full acceptance criteria in Given/When/Then form
 - **Tasks** — concrete implementation steps under each story
-- **System / feature tags** — `mobile-app`, `pos`, `loyalty`, `inventory`, etc.
+- **System / feature tags** — `companion-app`, `infotainment`, `ota`, `telematics`, etc.
 - **Gaps** — important capabilities the requirements imply but the existing backlog hasn't planned
 - **Conflicts** — new requests that contradict architectural constraints or existing in-flight work
 - **Duplicates** — new requests that overlap with items already in JIRA / GitHub
@@ -234,7 +234,7 @@ backlog-synthesizer/
 │   ├── epic_decomposer_prompt.md
 │   └── gap_detector_prompt.md
 ├── samples/
-│   ├── README.md                    ← what's in each sample, NorthStar Retail fiction
+│   ├── README.md                    ← what's in each sample, Meridian Motors fiction
 │   ├── meeting_notes.txt            ← customer meeting transcript
 │   ├── architecture_constraints.md  ← Confluence-style export
 │   ├── product_strategy.md          ← strategy document

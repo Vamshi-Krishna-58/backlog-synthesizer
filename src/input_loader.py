@@ -40,7 +40,7 @@ def load_tickets(path_str: str) -> list[dict]:
     """Load existing JIRA or GitHub tickets from a JSON file.
 
     Supported shapes:
-      - JIRA-style: `[{"key": "NS-101", "summary": "...", "description": "...", ...}, ...]`
+      - JIRA-style: `[{"key": "AD-101", "summary": "...", "description": "...", ...}, ...]`
       - GitHub-style: `[{"number": 42, "title": "...", "body": "...", ...}, ...]`
       - Wrapper object: `{"items": [...]}`
 

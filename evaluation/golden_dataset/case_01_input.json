@@ -1,6 +1,6 @@
 {
   "case_id": "case_01",
-  "description": "The bundled NorthStar Retail Q3 planning meeting. Should produce three high-priority topics (POS offline, pharmacy unification, search-inventory), flag duplicates against NS-412 and NS-389, and conflict-flag any offline card-sale story.",
+  "description": "The bundled Meridian Motors Connected Vehicle Q3 planning meeting. Should produce high-priority topics (OTA update resilience, navigation EV-charger availability, warranty/recall claim unification, connected-services tier visibility), flag duplicates against AD-412 and AD-389, and conflict-flag any automatic safety-critical rollback story.",
   "transcript_path": "samples/meeting_notes.txt",
   "constraints_path": "samples/architecture_constraints.md",
   "backlog_path": "samples/jira_backlog.json"

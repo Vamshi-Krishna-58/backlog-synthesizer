@@ -1,6 +1,6 @@
 {
   "case_id": "case_09",
-  "description": "Cross-team planning meeting touching POS, mobile, and pharmacy. The system must produce one story per concrete ask AND catch the NS-389 loyalty duplicate.",
+  "description": "Cross-team planning meeting touching vehicle software, dealer tech, and telematics. The system must produce one story per concrete ask AND catch the AD-389 connected-services trial expiry duplicate.",
   "transcript_path": "evaluation/golden_dataset/transcripts/case_09_multi_team.txt",
   "constraints_path": "samples/architecture_constraints.md",
   "backlog_path": "samples/jira_backlog.json"

@@ -68,39 +68,39 @@ def _patch_get(monkeypatch, responder):
 
 def test_normalise_issue_flattens_to_internal_shape():
     issue = {
-        "key": "NS-101",
+        "key": "AD-101",
         "fields": {
-            "summary": "Enable offline cash sales at POS",
+            "summary": "Enable offline trip logging on the head unit",
             "description": {
                 "type": "doc",
                 "content": [
                     {"type": "paragraph",
-                     "content": [{"type": "text", "text": "Lane needs"}]},
+                     "content": [{"type": "text", "text": "Head unit needs"}]},
                     {"type": "paragraph",
-                     "content": [{"type": "text", "text": "local SQLite fallback."}]},
+                     "content": [{"type": "text", "text": "local cache fallback."}]},
                 ],
             },
             "status":   {"name": "To Do"},
             "priority": {"name": "High"},
-            "labels":   ["pos", "offline"],
+            "labels":   ["telematics", "offline"],
         },
     }
     out = _normalise_issue(issue)
-    assert out["id"] == "NS-101"
-    assert out["title"] == "Enable offline cash sales at POS"
+    assert out["id"] == "AD-101"
+    assert out["title"] == "Enable offline trip logging on the head unit"
     assert out["summary"] == out["title"]   # both populated for back-compat
-    assert "Lane needs" in out["description"]
-    assert "local SQLite" in out["description"]
+    assert "Head unit needs" in out["description"]
+    assert "local cache" in out["description"]
     assert out["status"] == "To Do"
     assert out["priority"] == "High"
-    assert out["labels"] == ["pos", "offline"]
+    assert out["labels"] == ["telematics", "offline"]
     assert out["raw"] is issue   # raw preserved for any caller that needs it
 
 
 def test_normalise_issue_tolerates_missing_fields():
     """A barely-populated issue must not crash the adapter."""
-    out = _normalise_issue({"key": "NS-1", "fields": {"summary": "x"}})
-    assert out["id"] == "NS-1"
+    out = _normalise_issue({"key": "AD-1", "fields": {"summary": "x"}})
+    assert out["id"] == "AD-1"
     assert out["title"] == "x"
     assert out["description"] == ""
     assert out["status"] == ""
@@ -110,7 +110,7 @@ def test_normalise_issue_tolerates_missing_fields():
 
 def test_normalise_issue_with_string_description():
     """Some old-API responses use a plain string for description."""
-    out = _normalise_issue({"key": "NS-1", "fields": {
+    out = _normalise_issue({"key": "AD-1", "fields": {
         "summary": "x", "description": "Simple text body."
     }})
     assert out["description"] == "Simple text body."
@@ -153,26 +153,26 @@ def test_mock_mode_reads_fixture(tmp_path):
     """Mock mode = default. Reads from the bundled JSON. No HTTP."""
     fixture = tmp_path / "tickets.json"
     fixture.write_text(
-        '[{"key": "NS-1", "summary": "Test", "description": "x", '
+        '[{"key": "AD-1", "summary": "Test", "description": "x", '
         '"status": "open", "labels": ["test"]}]'
     )
     jt = JiraTool(fixture_path=fixture)
     assert jt.mode == "mock"
     tickets = jt.list_all()
     assert len(tickets) == 1
-    assert tickets[0]["key"] == "NS-1"
+    assert tickets[0]["key"] == "AD-1"
 
 
 def test_mock_mode_search_substring(tmp_path):
     fixture = tmp_path / "tickets.json"
     fixture.write_text(
-        '[{"summary": "Pharmacy refill SMS", "description": ""},'
-        ' {"summary": "Loyalty tier email", "description": ""}]'
+        '[{"summary": "Recall notification SMS", "description": ""},'
+        ' {"summary": "Connected services email", "description": ""}]'
     )
     jt = JiraTool(fixture_path=fixture)
-    out = jt.search("pharmacy")
+    out = jt.search("recall")
     assert len(out) == 1
-    assert "Pharmacy" in out[0]["summary"]
+    assert "Recall" in out[0]["summary"]
 
 
 # --------------------------------------------------------------- live mode
@@ -188,7 +188,7 @@ def _live_jira(env_token: str = "tok"):
         base_url="https://demo.atlassian.net",
         email="me@example.com",
         api_token=env_token,
-        project_key="NS",
+        project_key="MM",
     )
 
 
@@ -200,7 +200,7 @@ def test_live_mode_requires_credentials(monkeypatch):
     """
     for var in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"):
         monkeypatch.delenv(var, raising=False)
-    jt = JiraTool(mode="live", base_url="", email="", api_token="", project_key="NS")
+    jt = JiraTool(mode="live", base_url="", email="", api_token="", project_key="MM")
     with pytest.raises(ToolError, match="JIRA_BASE_URL"):
         jt.list_all()
 
@@ -211,8 +211,8 @@ def test_live_list_all_uses_jql_search_endpoint(monkeypatch):
     def responder(url, params, **kw):
         return _FakeResponse(200, {
             "issues": [
-                {"key": "NS-100", "fields": {"summary": "Test 1", "status": {"name": "To Do"}}},
-                {"key": "NS-101", "fields": {"summary": "Test 2", "status": {"name": "Done"}}},
+                {"key": "AD-100", "fields": {"summary": "Test 1", "status": {"name": "To Do"}}},
+                {"key": "AD-101", "fields": {"summary": "Test 2", "status": {"name": "Done"}}},
             ],
             # No nextPageToken — single page.
         })
@@ -224,11 +224,11 @@ def test_live_list_all_uses_jql_search_endpoint(monkeypatch):
     assert len(captured) == 1
     url, params = captured[0]
     assert url.endswith("/rest/api/3/search/jql")
-    assert 'project = "NS"' in params["jql"]
+    assert 'project = "MM"' in params["jql"]
     assert "ORDER BY created DESC" in params["jql"]
     assert "summary" in params["fields"]   # field allowlist applied
     assert len(tickets) == 2
-    assert tickets[0]["id"] == "NS-100"
+    assert tickets[0]["id"] == "AD-100"
     assert tickets[1]["title"] == "Test 2"
 
 
@@ -236,9 +236,9 @@ def test_live_list_all_paginates_via_next_page_token(monkeypatch):
     """When the response carries `nextPageToken`, the tool must fetch
     the next page and append. Stops when the token disappears."""
     pages = [
-        {"issues": [{"key": f"NS-{i}", "fields": {"summary": f"S{i}"}} for i in range(50)],
+        {"issues": [{"key": f"AD-{i}", "fields": {"summary": f"S{i}"}} for i in range(50)],
          "nextPageToken": "page2"},
-        {"issues": [{"key": f"NS-{i}", "fields": {"summary": f"S{i}"}} for i in range(50, 75)]},
+        {"issues": [{"key": f"AD-{i}", "fields": {"summary": f"S{i}"}} for i in range(50, 75)]},
     ]
     state = {"call": 0}
     def responder(url, params, **kw):
@@ -264,7 +264,7 @@ def test_live_list_all_caps_at_max_results(monkeypatch):
     # the cap the loop would never terminate.
     def responder(url, params, **kw):
         return _FakeResponse(200, {
-            "issues": [{"key": f"NS-{i}", "fields": {"summary": "x"}} for i in range(50)],
+            "issues": [{"key": f"AD-{i}", "fields": {"summary": "x"}} for i in range(50)],
             "nextPageToken": "more",
         })
     _patch_get(monkeypatch, responder)
@@ -272,7 +272,7 @@ def test_live_list_all_caps_at_max_results(monkeypatch):
     jt = JiraTool(
         mode="live", base_url="https://demo.atlassian.net",
         email="me@example.com", api_token="tok",
-        project_key="NS", max_results=120,
+        project_key="MM", max_results=120,
     )
     tickets = jt.list_all()
     assert len(tickets) == 120
@@ -288,13 +288,13 @@ def test_live_search_wraps_plain_string_in_text_query(monkeypatch):
     _patch_get(monkeypatch, responder)
 
     jt = _live_jira()
-    jt.search("pharmacy refill")
-    assert 'project = "NS"' in captured_jqls[-1]
-    assert 'text ~ "pharmacy refill"' in captured_jqls[-1]
+    jt.search("recall notification")
+    assert 'project = "MM"' in captured_jqls[-1]
+    assert 'text ~ "recall notification"' in captured_jqls[-1]
 
     # Pass full JQL through unchanged.
-    jt.search('project = "NS" AND status = "Done"')
-    assert captured_jqls[-1] == 'project = "NS" AND status = "Done"'
+    jt.search('project = "MM" AND status = "Done"')
+    assert captured_jqls[-1] == 'project = "MM" AND status = "Done"'
 
 
 def test_live_search_escapes_double_quotes(monkeypatch):
@@ -350,7 +350,7 @@ def test_live_caches_first_list_all(monkeypatch):
     def responder(url, params, **kw):
         call_count["n"] += 1
         return _FakeResponse(200, {
-            "issues": [{"key": "NS-1", "fields": {"summary": "x"}}],
+            "issues": [{"key": "AD-1", "fields": {"summary": "x"}}],
         })
     _patch_get(monkeypatch, responder)
 
@@ -378,39 +378,39 @@ def _patch_post(monkeypatch, responder):
 def _live_writer():
     return JiraTool(
         mode="live", base_url="https://t.atlassian.net",
-        email="a@b.c", api_token="tok", project_key="NS",
+        email="a@b.c", api_token="tok", project_key="MM",
     )
 
 
 def test_create_issue_success_returns_key_and_url(monkeypatch):
     def responder(url, body, **kw):
-        return _FakeResponse(201, {"key": "NS-7"})
+        return _FakeResponse(201, {"key": "AD-7"})
     _patch_post(monkeypatch, responder)
     from tools.jira_tool import _text_adf
     out = _live_writer().create_issue(
-        summary="Offline cash sales", description_adf=_text_adf("x"),
-        issue_type="Story", labels=["pos", "offline mode"],
+        summary="Offline trip logging", description_adf=_text_adf("x"),
+        issue_type="Story", labels=["telematics", "offline mode"],
     )
-    assert out["key"] == "NS-7"
-    assert out["url"] == "https://t.atlassian.net/browse/NS-7"
+    assert out["key"] == "AD-7"
+    assert out["url"] == "https://t.atlassian.net/browse/AD-7"
 
 
 def test_create_issue_sanitizes_labels(monkeypatch):
-    cap = _patch_post(monkeypatch, lambda u, b, **k: _FakeResponse(201, {"key": "NS-8"}))
+    cap = _patch_post(monkeypatch, lambda u, b, **k: _FakeResponse(201, {"key": "AD-8"}))
     from tools.jira_tool import _text_adf
     _live_writer().create_issue(summary="s", description_adf=_text_adf("x"),
-                                labels=["offline mode", "pos"])
-    assert cap[0]["fields"]["labels"] == ["offline-mode", "pos"]  # spaces -> hyphens
+                                labels=["offline mode", "telematics"])
+    assert cap[0]["fields"]["labels"] == ["offline-mode", "telematics"]  # spaces -> hyphens
 
 
 def test_create_issue_falls_back_when_parent_rejected(monkeypatch):
     # First attempt (with parent) 400s; fallback without parent succeeds.
-    seq = [_FakeResponse(400, text="parent not allowed"), _FakeResponse(201, {"key": "NS-9"})]
+    seq = [_FakeResponse(400, text="parent not allowed"), _FakeResponse(201, {"key": "AD-9"})]
     _patch_post(monkeypatch, lambda u, b, **k: seq.pop(0))
     from tools.jira_tool import _text_adf
     out = _live_writer().create_issue(summary="s", description_adf=_text_adf("x"),
-                                      issue_type="Sub-task", parent_key="NS-1")
-    assert out["key"] == "NS-9"
+                                      issue_type="Sub-task", parent_key="AD-1")
+    assert out["key"] == "AD-9"
 
 
 def test_create_issue_auth_failure_raises(monkeypatch):
@@ -424,17 +424,17 @@ def test_publish_synthesis_creates_epic_story_subtask(monkeypatch):
     n = {"i": 0}
     def responder(url, body, **kw):
         n["i"] += 1
-        return _FakeResponse(201, {"key": f"NS-{100 + n['i']}"})
+        return _FakeResponse(201, {"key": f"AD-{100 + n['i']}"})
     cap = _patch_post(monkeypatch, responder)
 
     result = {"epics": [{
-        "id": "EP-01", "title": "POS Offline", "description": "keep selling",
+        "id": "EP-01", "title": "Telematics Offline", "description": "keep logging",
         "stories": [{
-            "id": "ST-01", "title": "Offline cash sales", "description": "d",
-            "user_story": "As a cashier...", "acceptance_criteria": ["Given... then..."],
-            "priority": "High", "priority_rationale": "revenue", "tags": ["pos"],
+            "id": "ST-01", "title": "Offline trip logging", "description": "d",
+            "user_story": "As a driver...", "acceptance_criteria": ["Given... then..."],
+            "priority": "High", "priority_rationale": "revenue", "tags": ["telematics"],
             "source_topic_id": "T-01", "potential_constraint_conflicts": ["C-02"],
-            "tasks": [{"id": "ST-01-TK-01", "title": "Embed SQLite", "type": "infra"}],
+            "tasks": [{"id": "ST-01-TK-01", "title": "Embed local cache", "type": "infra"}],
         }],
     }]}
     out = _live_writer().publish_synthesis(result, create_subtasks=True)
@@ -443,8 +443,8 @@ def test_publish_synthesis_creates_epic_story_subtask(monkeypatch):
     types = [c["fields"]["issuetype"]["name"] for c in cap]
     assert types == ["Epic", "Story", "Sub-task"]
     # Story is parented to the epic; sub-task to the story.
-    assert cap[1]["fields"]["parent"]["key"] == "NS-101"
-    assert cap[2]["fields"]["parent"]["key"] == "NS-102"
+    assert cap[1]["fields"]["parent"]["key"] == "AD-101"
+    assert cap[2]["fields"]["parent"]["key"] == "AD-102"
 
 
 def test_publish_synthesis_partial_failure_is_recorded(monkeypatch):
@@ -453,7 +453,7 @@ def test_publish_synthesis_partial_failure_is_recorded(monkeypatch):
     def responder(url, body, **kw):
         if body.get("fields", {}).get("summary") == "E":
             return _FakeResponse(400, text="no epic type")
-        return _FakeResponse(201, {"key": "NS-200"})
+        return _FakeResponse(201, {"key": "AD-200"})
     _patch_post(monkeypatch, responder)
     result = {"epics": [{"title": "E", "stories": [{"title": "S", "tasks": []}]}]}
     out = _live_writer().publish_synthesis(result, create_subtasks=False)

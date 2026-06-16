@@ -1,8 +1,8 @@
 """Seed a Confluence space with the bundled sample wiki content.
 
 Reads:
-  - samples/architecture_constraints.md  → "NorthStar Retail — Architecture Constraints"
-  - samples/product_strategy.md          → "NorthStar Retail — Product Strategy"
+  - samples/architecture_constraints.md  → "Meridian Motors — Architecture Constraints"
+  - samples/product_strategy.md          → "Meridian Motors — Product Strategy"
 
 Usage:
     python scripts/seed_confluence.py              # auto-pick the first space
@@ -43,11 +43,11 @@ from tools.confluence_tool import (  # noqa: E402
 SEEDS: list[tuple[Path, str]] = [
     (
         ROOT / "samples" / "architecture_constraints.md",
-        "NorthStar Retail — Architecture Constraints",
+        "Meridian Motors — Architecture Constraints",
     ),
     (
         ROOT / "samples" / "product_strategy.md",
-        "NorthStar Retail — Product Strategy",
+        "Meridian Motors — Product Strategy",
     ),
 ]
 

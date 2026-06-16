@@ -28,9 +28,9 @@ from dataclasses import asdict, dataclass
 # if nothing fits) but are flagged as "non-canonical" so reviewers can
 # decide whether the vocabulary needs to expand.
 CANONICAL_TAGS: set[str] = {
-    "pos", "mobile-app", "ecommerce", "loyalty", "inventory", "pharmacy",
-    "vendor-portal", "store-associate", "analytics", "payments",
-    "offline-mode", "accessibility", "performance", "security", "compliance",
+    "companion-app", "infotainment", "ota", "telematics", "connected-services",
+    "dealer-portal", "ev-charging", "navigation", "remote-commands", "fleet",
+    "payments", "offline-mode", "accessibility", "performance", "security", "compliance",
 }
 
 # An acceptance criterion should read like "Given … when … then …".

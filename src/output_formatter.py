@@ -23,7 +23,7 @@ The full result dict has this shape:
                         "description": "...",
                         "acceptance_criteria": [...],
                         "priority": "High",
-                        "tags": ["pos", "offline-mode"],
+                        "tags": ["telematics", "offline-mode"],
                         "tasks": [
                             {"id": "TK-01", "title": "..."},
                             ...

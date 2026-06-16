@@ -76,14 +76,14 @@ Reply with a single JSON object of this exact shape:
 
 # Worked example (illustrative — do not copy its content)
 
-Given a story `ST-01` "Enable offline card sales at the POS" and a `forbidden` constraint `C-02` "card sales must remain online-only per PCI", a correct conflict is:
+Given a story `ST-01` "Call the card processor directly from the companion app" and a `forbidden` constraint `C-02` "all payments must go through ConnectedPaymentGateway per PCI", a correct conflict is:
 
 { "story_id": "ST-01", "with": "C-02", "severity": "high",
-  "reason": "The story queues and posts card transactions offline, which directly violates the PCI requirement that card sales remain online-only." }
+  "reason": "The story calls the card processor directly, which directly violates the PCI requirement that all payments go through ConnectedPaymentGateway." }
 
-A correct gap, when the discussion implies offline transactions must be reconciled but no story or backlog ticket covers it:
+A correct gap, when the discussion implies offline trips must be reconciled but no story or backlog ticket covers it:
 
-{ "id": "G-01", "title": "Offline transaction reconciliation after WAN recovery",
-  "description": "Stories enable offline cash transactions during outages but none address syncing them back once connectivity returns, which matters for inventory accuracy and financial reporting.",
+{ "id": "G-01", "title": "Offline trip reconciliation after connectivity recovery",
+  "description": "Stories enable offline trip logging during connectivity loss but none address syncing them back once the vehicle reconnects, which matters for telematics accuracy and reporting.",
   "related_ids": ["ST-01"],
-  "evidence": "Store Ops described queuing transactions during outages but never mentioned how they reconcile when the WAN returns." }
+  "evidence": "The team described queuing trips during connectivity loss but never mentioned how they reconcile when the vehicle reconnects." }

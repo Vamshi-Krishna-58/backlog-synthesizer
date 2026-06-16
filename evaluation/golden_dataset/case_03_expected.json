@@ -1,17 +1,17 @@
 {
   "case_id": "case_03",
-  "description": "Hand-curated expectations for the mobile-team Slack standup. Tests adversarial robustness: real product asks are mixed with off-topic chatter (coffee machine, Severance, lunch, vacation). The synthesis must pick up only the real product work.",
+  "description": "Hand-curated expectations for the vehicle-software Slack standup. Tests adversarial robustness: real product asks are mixed with off-topic chatter (coffee machine, Severance, lunch, vacation). The synthesis must pick up only the real product work.",
 
   "required_topics": [
     {
-      "theme_keywords": ["apple pay", "google pay", "wallet", "pos"],
+      "theme_keywords": ["apple pay", "google pay", "connected services", "payment"],
       "must_appear": true,
-      "rationale": "Apple Pay / Google Pay at the POS lane was the dominant product thread of the week."
+      "rationale": "In-app Apple Pay / Google Pay for connected-services renewal was the dominant product thread of the week."
     },
     {
-      "theme_keywords": ["loyalty", "cart"],
+      "theme_keywords": ["subscription", "tier", "infotainment"],
       "must_appear": true,
-      "rationale": "Thursday introduced a small CX ask for loyalty points balance on the cart screen."
+      "rationale": "Thursday introduced a small CX ask for the connected-services subscription tier on the infotainment home screen."
     }
   ],
 
@@ -35,16 +35,16 @@
 
   "expected_duplicates": [
     {
-      "story_theme": ["search", "ranking", "purchase history"],
-      "existing_id": "NS-251",
+      "story_theme": ["navigation", "ranking", "charging preference"],
+      "existing_id": "AD-251",
       "min_confidence": "high",
-      "rationale": "The team explicitly identified NS-251 in the chat and said 'don't write a new story'. The synthesis must echo that by flagging any search-ranking story as a duplicate of NS-251."
+      "rationale": "The team explicitly identified AD-251 in the chat and said 'don't write a new story'. The synthesis must echo that by flagging any charging-preference ranking story as a duplicate of AD-251."
     },
     {
-      "story_theme": ["apple pay", "google pay", "pos"],
-      "existing_id": "NS-243",
+      "story_theme": ["apple pay", "google pay", "payment"],
+      "existing_id": "AD-243",
       "min_confidence": "medium",
-      "rationale": "NS-243 is the existing Apple Pay / Google Pay POS ticket. New stories on this theme should be flagged as overlapping."
+      "rationale": "AD-243 is the existing Apple Pay / Google Pay for connected services ticket. New stories on this theme should be flagged as overlapping."
     }
   ],
 

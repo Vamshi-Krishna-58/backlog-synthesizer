@@ -4,65 +4,65 @@
 
   "required_topics": [
     {
-      "theme_keywords": ["pos", "offline"],
+      "theme_keywords": ["ota", "update", "resilience"],
       "must_appear": true,
-      "rationale": "Theme 1 of the meeting was about POS outages. This must be picked up."
+      "rationale": "Theme 1 of the meeting was about OTA update failures during peak deployment windows. This must be picked up."
     },
     {
-      "theme_keywords": ["search", "inventory", "stock"],
+      "theme_keywords": ["navigation", "charger", "availability"],
       "must_appear": true,
-      "rationale": "Theme 2 was about search surfacing out-of-stock items."
+      "rationale": "Theme 2 was about navigation search surfacing unavailable EV charging stations."
     },
     {
-      "theme_keywords": ["pharmacy", "refill"],
+      "theme_keywords": ["warranty", "claim", "unification"],
       "must_appear": true,
-      "rationale": "Theme 3 was about pharmacy refill confusion."
+      "rationale": "Theme 3 was about warranty claim status confusion across intake channels."
     },
     {
-      "theme_keywords": ["loyalty", "tier"],
+      "theme_keywords": ["connected services", "tier"],
       "must_appear": true,
-      "rationale": "Theme 4 was about loyalty tier confusion."
+      "rationale": "Theme 4 was about connected-services subscription tier confusion."
     }
   ],
 
   "forbidden_topics": [
     {
-      "theme_keywords": ["self-checkout", "self checkout"],
+      "theme_keywords": ["drive-through payment", "in-vehicle payment hardware"],
       "must_not_appear": true,
-      "rationale": "Explicitly declined in the meeting (`Things we explicitly said NO to`)."
+      "rationale": "Explicitly declined in the meeting (`Things we explicitly said NO to`) — owned by OEM HW."
     },
     {
-      "theme_keywords": ["vendor portal redesign"],
+      "theme_keywords": ["dealer inventory portal redesign"],
       "must_not_appear": true,
-      "rationale": "Explicitly declined."
+      "rationale": "Explicitly declined — next FY."
     },
     {
-      "theme_keywords": ["b2b membership"],
+      "theme_keywords": ["b2b fleet telematics dashboard"],
       "must_not_appear": true,
-      "rationale": "Explicitly declined."
+      "rationale": "Explicitly declined — still in research."
     }
   ],
 
   "expected_duplicates": [
     {
-      "story_theme": ["search", "inventory"],
-      "existing_id": "NS-412",
+      "story_theme": ["navigation", "charger", "availability"],
+      "existing_id": "AD-412",
       "min_confidence": "medium",
-      "rationale": "NS-412 is the in-progress 'in stock at your store' badge fix — clearly the same problem space."
+      "rationale": "AD-412 is the in-progress 'Available Now' EV-charger availability badge fix — clearly the same problem space."
     },
     {
-      "story_theme": ["loyalty", "tier"],
-      "existing_id": "NS-389",
+      "story_theme": ["connected services", "tier"],
+      "existing_id": "AD-389",
       "min_confidence": "medium",
-      "rationale": "NS-389 is the loyalty tier downgrade email — same theme."
+      "rationale": "AD-389 is the connected-services trial expiry notification — same theme."
     }
   ],
 
   "expected_constraint_conflicts": [
     {
-      "story_keywords": ["card", "offline"],
+      "story_keywords": ["auto-rollback", "safety-critical"],
       "max_severity": "high",
-      "rationale": "Card sales offline are explicitly FORBIDDEN by Section 4 of the architecture wiki. Any story proposing this should be flagged."
+      "rationale": "Automatic rollback of safety-critical ECU updates is FORBIDDEN without a validated rollback image under ISO 26262 (Section 3). Any story proposing this should be flagged."
     }
   ],
 

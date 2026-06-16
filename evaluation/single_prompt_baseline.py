@@ -83,16 +83,16 @@ Reply with JSON only (no prose, no fences), of exactly this shape:
       "acceptance_criteria": ["Given <context>, when <action>, then <observable outcome>."],
       "priority": "High|Medium|Low",
       "priority_rationale": "concrete, non-empty sentence",
-      "tags": ["pos", "offline-mode"],
+      "tags": ["telematics", "offline-mode"],
       "source_topic_id": "T-01"
     }}]
   }}],
-  "duplicates": [{{"story_id": "ST-01", "existing_id": "NS-123", "confidence": "high|medium|low", "reason": "one sentence"}}],
+  "duplicates": [{{"story_id": "ST-01", "existing_id": "AD-123", "confidence": "high|medium|low", "reason": "one sentence"}}],
   "conflicts": [{{"story_id": "ST-01", "with": "C-01", "severity": "high|medium|low", "reason": "one sentence"}}],
   "gaps": [{{"id": "G-01", "title": "...", "description": "...", "evidence": "one grounded sentence"}}]
 }}
 
-Rules: 2-5 testable Given/When/Then acceptance criteria per story; canonical tags (pos, mobile-app, ecommerce, loyalty, inventory, pharmacy, vendor-portal, store-associate, analytics, payments, offline-mode, accessibility, performance, security, compliance); be conservative — do not invent work not grounded in the source. If a topic list would be empty, return empty arrays."""
+Rules: 2-5 testable Given/When/Then acceptance criteria per story; canonical tags (companion-app, infotainment, ota, telematics, connected-services, dealer-portal, ev-charging, navigation, remote-commands, fleet, payments, offline-mode, accessibility, performance, security, compliance); be conservative — do not invent work not grounded in the source. If a topic list would be empty, return empty arrays."""
 
 
 def _slim_backlog(tickets: list[dict]) -> str:
