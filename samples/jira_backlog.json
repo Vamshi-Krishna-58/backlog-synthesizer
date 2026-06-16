@@ -1,5 +1,13 @@
 [
   {
+    "key": "AD-263",
+    "summary": "Remote unlock reliability in low-signal areas",
+    "description": "Remote unlock and remote start commands from the companion app fail intermittently in underground parking and rural coverage; the app reports success before the Gateway ECU acknowledges. Improve actuation-path reliability and surface true command acknowledgement.",
+    "status": "ready",
+    "priority": "High",
+    "labels": ["companion-app", "remote-commands", "telematics"]
+  },
+  {
     "key": "AD-412",
     "summary": "Surface live 'Available Now' badge on EV charger search results",
     "description": "Navigation search currently shows a generic availability badge pulled from a 6-hour-old POI cache. Drivers complain when they navigate to a charger that is offline or full.",

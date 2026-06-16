@@ -116,6 +116,38 @@ the Gen1 TCU has a different capability floor than Gen2 vehicles."
 
 ------
 
+Theme 6: Remote unlock and remote start are unreliable in low-signal areas
+
+Kenji again. The companion app's remote unlock and remote start commands
+succeed only about 88% of the time, and the worst offenders are underground
+parking and rural coverage. The app shows "command sent" the moment it
+queues, so owners think it worked, walk away, and come back to a locked car.
+Two things: (1) the app must reflect the *actual* acknowledgement from the
+Gateway ECU, not just that the command was queued; (2) the actuation path
+should go through the Gateway ECU with a validated message authentication
+code rather than the legacy path.
+
+Petra: "Owners are calling roadside assistance for what is really a failed
+remote command. It's expensive and embarrassing."
+
+Sarah: "High priority. This is a trust issue."
+
+------
+
+Theme 7: Dealer portal sign-in friction
+
+Petra raised this for the dealer side. Service advisors at our larger dealer
+groups juggle separate logins for the dealer portal, and sessions expire
+mid-service-write so they lose a partially entered warranty record. The top-20
+dealer groups want single sign-on, and security wants two-factor on the portal
+because it touches owner PII.
+
+Ravi: "Both of these are about dealer-portal identity. Make sure any new auth
+flow federates through VehicleIdentityService — we are not standing up a second
+credential store."
+
+------
+
 Things we explicitly said NO to this round:
 - In-vehicle payment for drive-through (hardware project owned by OEM HW, not us)
 - Dealer inventory portal redesign (next FY)
