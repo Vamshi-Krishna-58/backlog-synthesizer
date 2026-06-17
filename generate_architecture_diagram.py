@@ -100,15 +100,15 @@ for i, (name, sub) in enumerate([
 box(ax, 0.330, 0.848, 0.270, 0.082, C_AUTH, border_color=T_VIOLET)
 label(ax, 0.465, 0.938, "AUTHENTICATION  ·  Microsoft Entra ID", size=6.5, color=T_VIOLET, weight="bold")
 label(ax, 0.465, 0.920, "HMAC-SHA256 signed state token  ·  generate_state_nonce() → raw.ts.sig", size=6, color=T_PRIMARY)
-label(ax, 0.465, 0.906, "✓ Stateless CSRF — survives container restarts & scale-to-zero  (NEW)", size=5.8, color=T_GREEN)
+label(ax, 0.465, 0.906, "✓ Stateless CSRF — survives container restarts & scale-to-zero", size=5.8, color=T_GREEN)
 label(ax, 0.465, 0.892, "consume_state(): verify HMAC + TTL 10min — no server-side storage", size=5.8, color=T_MUTED)
-label(ax, 0.465, 0.878, "ENTRA_REDIRECT_URI → set dynamically from Azure FQDN  (NEW)", size=5.8, color=T_VIOLET)
+label(ax, 0.465, 0.878, "ENTRA_REDIRECT_URI → set dynamically from Azure FQDN", size=5.8, color=T_VIOLET)
 label(ax, 0.465, 0.864, "JWT RS256 verify via PyJWKClient JWKS  ·  roles → user/admin/contributor", size=5.8, color=T_MUTED)
 
 # LLM Providers
 for i, (name, api, note, col) in enumerate([
     ("Claude Sonnet 4.5", "Anthropic API", "prompt cache ≥4KB", T_GREEN),
-    ("Gemini 2.5 Flash",  "Google AI API", "GOOGLE_API_KEY ✓ NEW", T_AMBER),
+    ("Gemini 2.5 Flash",  "Google AI API", "GOOGLE_API_KEY", T_AMBER),
 ]):
     xi = 0.615 + i * 0.122
     box(ax, xi, 0.852, 0.115, 0.075, C_LLM)
@@ -190,7 +190,7 @@ tools = [
     ("ConfluenceTool", "get_page(id) REST  ·  BS4 HTML strip  −60% tokens",      T_AMBER),
     ("EmbeddingTool",  "all-MiniLM-L6-v2  ·  cosine≥0.6  ·  top-K=5 candidates",T_SILVER),
     ("ClaudeTool",     "ChatAnthropic  ·  prompt cache ≥4KB  ·  vision support",  T_GREEN),
-    ("GeminiTool",     "ChatGoogleGenerativeAI  ·  GOOGLE_API_KEY  ✓ NEW",        T_AMBER),
+    ("GeminiTool",     "ChatGoogleGenerativeAI  ·  GOOGLE_API_KEY",        T_AMBER),
 ]
 for i, (name, desc, col) in enumerate(tools):
     yi = 0.597 - i * 0.028
@@ -204,8 +204,8 @@ label(ax, 0.450, 0.613, "SECURITY", size=6, color=T_ROSE, weight="bold")
 security = [
     ("InputSanitizer",   "8 injection patterns  ·  replace → [INJECTION REDACTED]"),
     ("OutputScanner",    "PII  ·  toxicity  ·  demographic bias"),
-    ("Guardrails",       ">40% High priority  ·  missing ACs  ·  duplicate titles"),
-    ("HMAC State ✓ NEW", "token=raw.ts.HMAC(CLIENT_SECRET)  stateless CSRF"),
+    ("Guardrails",       "AC count + GWT grammar  ·  duplicate titles  ·  weak priority rationale"),
+    ("HMAC State", "token=raw.ts.HMAC(CLIENT_SECRET)  stateless CSRF"),
     ("JWT RS256",        "PyJWKClient JWKS verify  ·  1h cache  ·  valid_issuers"),
     ("Budget Store",     "try_reserve()  ·  settle_reservation()  ·  daily cap USD"),
 ]
@@ -223,7 +223,7 @@ memory = [
     ("MemoryStore KV",    "put()/get() explicit agent handoff  ·  per-run isolated",       C_MEMORY, T_AMBER),
     ("MemoryStore Vector","in-process numpy | NPZ file | ChromaDB (USE_CHROMADB=1)",       C_MEMORY, T_AMBER),
     ("AuditLog",          "chain-fingerprint SHA-256  ·  every LLM call  ·  collapsible", C_MEMORY, T_AMBER),
-    ("Prometheus :9090",  "synthesis_start/end  ·  token gauges  ·  cost_usd counter",    C_INFRA,  T_GREEN),
+    ("Prometheus :9090",  "syntheses_total  ·  synthesis_cost_usd  ·  tokens_total  ·  llm_errors_total",    C_INFRA,  T_GREEN),
     ("OpenTelemetry",     "pipeline.run  ·  node spans  ·  llm.call spans  ·  OTLP",      C_INFRA,  T_GREEN),
     ("Run History",       "RUNS_DIR/.runs/<user>/<ts>.json  ·  filter by date/model",     C_MEMORY, T_SILVER),
 ]
@@ -248,8 +248,8 @@ jobs = [
     ("provision",          "az group/acr/cae/containerapp create — idempotent  ·  set -euo pipefail", T_GREEN),
     ("build",              "docker/build-push-action@v6  ·  :sha + :latest  ·  GHA layer cache",      T_ACCENT),
     ("deploy-staging",     "secret set  ·  registry set  ·  containerapp update",                     T_AMBER),
-    ("  ENTRA_REDIRECT_URI","→ read Azure FQDN dynamically  (NEW)",                                   T_VIOLET),
-    ("  GOOGLE_API_KEY",   "secretref:google-api-key  (NEW)",                                         T_AMBER),
+    ("  ENTRA_REDIRECT_URI","→ read Azure FQDN dynamically",                                   T_VIOLET),
+    ("  GOOGLE_API_KEY",   "secretref:google-api-key",                                         T_AMBER),
     ("  ANTHROPIC_API_KEY","secretref:anthropic-api-key",                                              T_GREEN),
     ("  health check",     "/_stcore/health  ·  24×10s  ·  4min timeout",                            T_MUTED),
     ("deploy-production",  "environment: azure-production  ·  manual approval  ·  --revision-suffix", T_ROSE),
@@ -286,10 +286,10 @@ label(ax, 0.838, 0.400, "SECRETS & ENV", size=6, color=T_ROSE, weight="bold")
 secrets_list = [
     ("AZURE_CREDENTIALS",   "SPN JSON  ·  GitHub secret",                   T_MUTED),
     ("ANTHROPIC_API_KEY",   "sk-ant-...  ·  GitHub + container secret",     T_GREEN),
-    ("GOOGLE_API_KEY",      "AIza...  ·  GitHub + container secret  ✓ NEW", T_AMBER),
+    ("GOOGLE_API_KEY",      "AIza...  ·  GitHub + container secret", T_AMBER),
     ("JIRA_API_TOKEN",      "Atlassian PAT  ·  GitHub + container",         T_MUTED),
     ("ENTRA_CLIENT_SECRET", "app reg secret  ·  GitHub + container",        T_VIOLET),
-    ("ENTRA_REDIRECT_URI",  "set from Azure FQDN at deploy time  ✓ NEW",    T_VIOLET),
+    ("ENTRA_REDIRECT_URI",  "set from Azure FQDN at deploy time",    T_VIOLET),
     ("CLIENT_NAME",         "Meridian Motors  ·  plain env var",            T_SILVER),
 ]
 for i, (name, desc, col) in enumerate(secrets_list):
@@ -366,12 +366,8 @@ for col, tc, lbl in legend:
     lx += 0.128
 
 ax.text(0.5, 0.002,
-        "Changes in this version:  "
-        "✓ HMAC-signed OAuth state tokens (stateless CSRF, survives scale-to-zero)  ·  "
-        "✓ ENTRA_REDIRECT_URI set dynamically from Azure FQDN  ·  "
-        "✓ GOOGLE_API_KEY injected as container secret  ·  "
-        "✓ Gap Detector max_tokens 4000 → 8000",
-        fontsize=5.2, color=T_GREEN, ha="center", va="bottom", style="italic")
+        "Claude + Gemini providers  ·  deterministic dedup & guardrails  ·  tamper-evident audit log  ·  HMAC-signed OAuth state  ·  Azure Container Apps (canary)",
+        fontsize=5.2, color=T_MUTED, ha="center", va="bottom", style="italic")
 
 plt.tight_layout(pad=0.2)
 plt.savefig("architecture_diagram.png", dpi=180, bbox_inches="tight",
