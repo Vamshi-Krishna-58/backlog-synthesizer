@@ -6,10 +6,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    # Full live eval suite (all golden cases + LLM judge + regression gate) runs
-    # nightly at 07:00 UTC. Pushes run only a fast single-case smoke (see eval-suite).
-    - cron: "0 7 * * *"
+  # Nightly schedule removed to avoid unattended Anthropic credit usage.
+  # Run the full live eval suite on demand via the "Run workflow" button
+  # (workflow_dispatch) — e.g. before a release or after a prompt change.
 
 jobs:
   unit-tests:
@@ -100,11 +99,11 @@ jobs:
   eval-suite:
     name: Eval suite (gated, live LLM)
     runs-on: ubuntu-latest
-    # Burning real Anthropic credit, so the trigger is gated: never on PRs from
-    # forks. Push to main runs a FAST single-case smoke; the full suite (all
-    # golden cases + LLM judge + regression enforcement) runs nightly via the
-    # schedule and on-demand via workflow_dispatch.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event_name == 'schedule' }}
+    # Burning real Anthropic credit, so the trigger is gated: never on PRs.
+    # Push to main runs a FAST single-case smoke; the full suite (all golden
+    # cases + LLM judge + regression enforcement) runs on-demand only via
+    # workflow_dispatch (the nightly schedule was removed to save credit).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
     needs: unit-tests
     # Full suite makes 50-80+ sequential LLM calls — 20 min was too short and the
     # job got cancelled mid-run. 45 min covers a full run with headroom.
@@ -117,7 +116,7 @@ jobs:
       - name: Skip if no API key configured
         # Forks won't have the secret; rather than failing the job, gate
         # downstream steps on this output so the job ends cleanly.
-        # Also decide the mode: push → smoke (one case, no judge); schedule /
+        # Also decide the mode: push → smoke (one case, no judge);
         # workflow_dispatch → full (all cases + judge + regression enforcement).
         id: gate
         run: |
@@ -155,9 +154,9 @@ jobs:
           python evaluation/run_evaluation.py --case case_01 --no-save-results 2>&1 \
             | tee artifacts/eval-results.txt
 
-      - name: Run full eval suite (scheduled / manual — Anthropic Claude)
+      - name: Run full eval suite (manual — Anthropic Claude)
         # All 10 golden cases + LLM-as-judge → 50-80+ API calls, ~$2-4 on Sonnet.
-        # Runs nightly and on workflow_dispatch, not on every push.
+        # Runs only on workflow_dispatch (manual), never on push or PR.
         if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.mode == 'full'
         run: |
           mkdir -p artifacts
