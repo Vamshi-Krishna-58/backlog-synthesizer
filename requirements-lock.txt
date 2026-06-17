@@ -203,7 +203,6 @@ httpx==0.28.1
     #   langsmith
     #   mcp
     #   mcp-atlassian
-    #   ollama
 httpx-sse==0.4.3
     # via
     #   langchain-community
@@ -283,15 +282,12 @@ langchain-core==1.4.5
     #   langchain-classic
     #   langchain-community
     #   langchain-google-genai
-    #   langchain-ollama
     #   langchain-text-splitters
     #   langgraph
     #   langgraph-checkpoint
     #   langgraph-prebuilt
     #   langgraph-sdk
 langchain-google-genai==4.2.5
-    # via -r requirements.txt
-langchain-ollama==1.1.0
     # via -r requirements.txt
 langchain-protocol==0.0.16
     # via
@@ -376,8 +372,6 @@ oauthlib==3.3.1
     # via
     #   atlassian-python-api
     #   requests-oauthlib
-ollama==0.6.2
-    # via langchain-ollama
 onnxruntime==1.26.0
     # via chromadb
 openapi-pydantic==0.5.1
@@ -516,7 +510,6 @@ pydantic[email]==2.13.4
     #   langsmith
     #   mcp
     #   mcp-atlassian
-    #   ollama
     #   openapi-pydantic
     #   pydantic-settings
 pydantic-core==2.46.4
