@@ -12,6 +12,9 @@ outputs/*.md
 .vscode/
 .idea/
 
+# Claude Code local tooling config (not part of the project)
+.claude/
+
 # local embedding/vector cache
 .cache/
 
