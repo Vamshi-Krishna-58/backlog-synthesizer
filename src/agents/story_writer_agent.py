@@ -12,7 +12,7 @@ Writes to memory:
         priority_rationale, tags, source_topic_id, conflicts_with_constraints
     }
 
-Tools used: `claude_tool` only.
+
 """
 
 from __future__ import annotations
