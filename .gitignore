@@ -15,6 +15,9 @@ outputs/*.md
 # Claude Code local tooling config (not part of the project)
 .claude/
 
+# Local auth fallback config — holds a bcrypt hash + cookie key; keep only the .example
+config/auth.yaml
+
 # local embedding/vector cache
 .cache/
 
