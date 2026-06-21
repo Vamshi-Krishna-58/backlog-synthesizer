@@ -32,7 +32,7 @@ flowchart TB
     %% ─────────────────────────────────────────────────────────────────
     subgraph ENTRY["  User Entry Points  "]
         direction LR
-        WEB["🖥️ Streamlit Web UI\napp.py · port 8501"]:::ui
+        WEB["🖥️ Streamlit Web UI\napp.py · port 8502"]:::ui
         CLI_["⌨️ CLI\nsrc/main.py"]:::ui
     end
 
