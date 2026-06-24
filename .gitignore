@@ -39,3 +39,6 @@ logs/audit_chain.db
 
 # Auth credential file — contains bcrypt password hashes; use config/auth.yaml.example as template
 config/auth.yaml
+
+# One-time Azure provisioning script — kept locally but not tracked in git
+scripts/azure_setup.sh
