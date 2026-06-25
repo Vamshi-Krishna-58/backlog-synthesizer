@@ -194,6 +194,8 @@ class JiraTool(Tool):
         label: str = "backlog-synth",
         max_issues: int = 300,
         progress=None,
+        selected_ids: set[str] | None = None,
+        published_map: dict[str, dict] | None = None,
     ) -> dict:
         """Create the synthesized backlog in live Jira as Epic → Story → Sub-task.
 
@@ -205,9 +207,21 @@ class JiraTool(Tool):
         - Each task  → a `Sub-task` under its story (best-effort; skipped for a
           story if the project rejects sub-tasks).
 
-        Returns: {created: [...], errors: [...], counts: {...}, base_url, project}.
-        Failures on one item are recorded and the rest continue — a partial
-        publish is more useful in a live demo than an all-or-nothing abort.
+        Selective publish (``selected_ids``): when provided, only synthesis
+        items whose stable id (``epic["id"]`` / ``story["id"]``) is in the set
+        are created.  ``None`` means "everything" — the original behaviour.
+
+        Idempotent re-publish (``published_map``): a cumulative
+        ``{synthesis_item_id: {key, url, level, ...}}`` map of items already
+        created in a previous push.  Items present here are **never recreated**;
+        an already-published epic's Jira key is reused as the parent for any
+        newly-selected child story, so re-clicking "Push to Jira" can only add
+        what's missing — it cannot produce duplicate tickets.
+
+        Returns: {created, errors, counts, skipped, published_map, base_url,
+        project}.  ``created`` lists only what was created on *this* call;
+        ``published_map`` is the merged cumulative map to carry into the next
+        push.  Failures on one item are recorded and the rest continue.
         """
         self._require_live_credentials()
         project = project_key or self._project_key
@@ -221,32 +235,68 @@ class JiraTool(Tool):
                 except Exception:  # noqa: BLE001 — a UI hook must never break the publish
                     pass
 
+        # Cumulative id -> created-record map. Seeded with prior pushes so we
+        # reuse existing Jira keys instead of creating duplicates.
+        pub_map: dict[str, dict] = dict(published_map or {})
+
+        def _wanted(item_id: str) -> bool:
+            # None selection == publish everything (backward-compatible default).
+            return selected_ids is None or item_id in selected_ids
+
         created: list[dict] = []
         errors: list[str] = []
+        skipped = 0
         count = 0
 
-        for epic in result.get("epics") or []:
+        for ei, epic in enumerate(result.get("epics") or []):
             if count >= max_issues:
                 break
-            epic_key = None
-            try:
-                e = self.create_issue(
-                    summary=epic.get("title") or "Untitled epic",
-                    description_adf=_text_adf(epic.get("description", "")),
-                    issue_type="Epic",
-                    labels=[label],
-                    project_key=project,
-                )
-                created.append({**e, "level": "epic"})
-                epic_key = e["key"]
-                count += 1
-                _emit(f"Epic {e['key']} — {e['summary'][:60]}")
-            except ToolError as ex:
-                errors.append(f"epic '{epic.get('title')}': {ex}")
+            epic_id = epic.get("id") or f"EP-{ei + 1:02d}"
+            epic_stories = epic.get("stories") or []
 
-            for story in epic.get("stories") or []:
+            # Stories under this epic that are both selected and not yet pushed.
+            stories_to_make = [
+                (si, s) for si, s in enumerate(epic_stories)
+                if _wanted(s.get("id") or f"{epic_id}-ST-{si + 1:02d}")
+                and (s.get("id") or f"{epic_id}-ST-{si + 1:02d}") not in pub_map
+            ]
+
+            # The epic must exist if it was selected itself, or if any of its
+            # not-yet-published stories were selected (they need a parent).
+            epic_needed = (_wanted(epic_id) and epic_id not in pub_map) or bool(stories_to_make)
+
+            epic_key = None
+            if epic_id in pub_map:
+                epic_key = pub_map[epic_id]["key"]  # reuse — never recreate
+                if _wanted(epic_id):
+                    skipped += 1
+            elif epic_needed:
+                try:
+                    e = self.create_issue(
+                        summary=epic.get("title") or "Untitled epic",
+                        description_adf=_text_adf(epic.get("description", "")),
+                        issue_type="Epic",
+                        labels=[label],
+                        project_key=project,
+                    )
+                    rec = {**e, "level": "epic"}
+                    created.append(rec)
+                    pub_map[epic_id] = rec
+                    epic_key = e["key"]
+                    count += 1
+                    _emit(f"Epic {e['key']} — {e['summary'][:60]}")
+                except ToolError as ex:
+                    errors.append(f"epic '{epic.get('title')}': {ex}")
+
+            for si, story in enumerate(epic_stories):
                 if count >= max_issues:
                     break
+                story_id = story.get("id") or f"{epic_id}-ST-{si + 1:02d}"
+                if not _wanted(story_id):
+                    continue
+                if story_id in pub_map:
+                    skipped += 1  # already created on a previous push
+                    continue
                 story_key = None
                 try:
                     s = self.create_issue(
@@ -257,7 +307,9 @@ class JiraTool(Tool):
                         parent_key=epic_key,
                         project_key=project,
                     )
-                    created.append({**s, "level": "story"})
+                    rec = {**s, "level": "story"}
+                    created.append(rec)
+                    pub_map[story_id] = rec
                     story_key = s["key"]
                     count += 1
                     _emit(f"  Story {s['key']} — {s['summary'][:60]}")
@@ -267,11 +319,15 @@ class JiraTool(Tool):
 
                 if create_subtasks and story_key:
                     made = 0
-                    for task in story.get("tasks") or []:
+                    for ti, task in enumerate(story.get("tasks") or []):
                         if count >= max_issues:
                             break
+                        task_id = task.get("id") or f"{story_id}-TK-{ti + 1:02d}"
+                        if task_id in pub_map:
+                            skipped += 1
+                            continue
                         try:
-                            st = self.create_issue(
+                            stk = self.create_issue(
                                 summary=task.get("title") or "Task",
                                 description_adf=_text_adf(f"Type: {task.get('type', 'task')}"),
                                 issue_type="Sub-task",
@@ -279,7 +335,9 @@ class JiraTool(Tool):
                                 labels=[label],
                                 project_key=project,
                             )
-                            created.append({**st, "level": "subtask"})
+                            rec = {**stk, "level": "subtask"}
+                            created.append(rec)
+                            pub_map[task_id] = rec
                             made += 1
                             count += 1
                         except ToolError:
@@ -300,6 +358,8 @@ class JiraTool(Tool):
                 "stories": sum(1 for c in created if c["level"] == "story"),
                 "subtasks": sum(1 for c in created if c["level"] == "subtask"),
             },
+            "skipped": skipped,
+            "published_map": pub_map,
             "project": project,
             "base_url": self._base_url,
         }

@@ -1927,59 +1927,161 @@ def show_jira_dialog() -> None:
             "missing grounding or unresolvable constraint conflicts."
         )
 
+    # ---- Per-item selection tree (with idempotency markers) ----
+    # `jira_published_map` is the cumulative {synthesis_item_id: {key,url,...}}
+    # of everything created for THIS synthesis on prior pushes. Items already in
+    # it are shown as done (with their Jira link) and are not offered again, so
+    # re-opening the dialog and pushing can only add what's missing.
+    _pub_map: dict = st.session_state.get("jira_published_map") or {}
+
+    st.markdown("**Select what to create in Jira**")
+    st.caption(
+        "Tick the epics / stories you want as Jira issues. Items already created "
+        "show their key and can't be created twice."
+    )
+
+    _selected: set[str] = set()
+    _n_remaining = 0  # selectable (not-yet-published) items currently ticked
+    for _epic in _epics:
+        _eid = _epic.get("id") or ""
+        _etitle = _epic.get("title") or "Untitled epic"
+        if _eid in _pub_map:
+            _ek = _pub_map[_eid]
+            st.markdown(
+                f'✅ <a href="{_ek["url"]}" target="_blank">{_esc(_ek["key"])}</a> '
+                f'· <strong>{_esc(_etitle)}</strong> '
+                f'<span style="color:var(--text-faint);font-size:0.8rem;">(already in Jira)</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            if st.checkbox(f"📦 Epic · {_etitle}", value=True, key=f"jira_sel_{_eid}"):
+                _selected.add(_eid)
+                _n_remaining += 1
+
+        for _story in _epic.get("stories") or []:
+            _sid = _story.get("id") or ""
+            _stitle = _story.get("title") or "Untitled story"
+            if _sid in _pub_map:
+                _sk = _pub_map[_sid]
+                st.markdown(
+                    f'&nbsp;&nbsp;&nbsp;&nbsp;↳ ✅ '
+                    f'<a href="{_sk["url"]}" target="_blank">{_esc(_sk["key"])}</a> '
+                    f'· {_esc(_stitle)}',
+                    unsafe_allow_html=True,
+                )
+            else:
+                _ind, _body = st.columns([1, 22])
+                with _body:
+                    if st.checkbox(f"📝 {_stitle}", value=True, key=f"jira_sel_{_sid}"):
+                        _selected.add(_sid)
+                        _n_remaining += 1
+
+    if _pub_map and _n_remaining == 0:
+        st.success("Everything in this synthesis has already been pushed to Jira. ✅")
+
     _subs = st.checkbox("Also create sub-tasks", value=True, key="jira_dlg_subtasks")
 
-    st.markdown(
-        f'<div style="padding:0.5rem 0.8rem;background:rgba(251,113,133,.08);'
-        f'border:1px solid rgba(251,113,133,.3);border-radius:6px;margin:0.5rem 0;font-size:0.82rem;">'
-        f'⚠ This will create <strong>{_n_epics} epic(s)</strong>, '
-        f'<strong>{_n_stories} story(ies)</strong>, and up to '
-        f'<strong>{_n_tasks} sub-task(s)</strong> as <em>real issues</em> in '
-        f'<strong>{_esc(_proj)}</strong>. This action cannot be automatically undone.</div>',
-        unsafe_allow_html=True,
+    _n_sel_epics = sum(1 for e in _epics if (e.get("id") or "") in _selected)
+    _n_sel_stories = sum(
+        1 for e in _epics for s in (e.get("stories") or [])
+        if (s.get("id") or "") in _selected
     )
 
-    # Mandatory confirmation for contributors; admins can also confirm (same gate).
-    _confirmed = st.checkbox(
-        f"I confirm: create {_n_epics} epic(s), {_n_stories} story(ies), "
-        f"up to {_n_tasks} sub-task(s) in **{_proj}**",
-        value=False,
-        key="jira_dlg_confirm",
-    )
+    if _n_remaining > 0:
+        st.markdown(
+            f'<div style="padding:0.5rem 0.8rem;background:rgba(251,113,133,.08);'
+            f'border:1px solid rgba(251,113,133,.3);border-radius:6px;margin:0.5rem 0;font-size:0.82rem;">'
+            f'⚠ This will create <strong>{_n_sel_epics} epic(s)</strong> and '
+            f'<strong>{_n_sel_stories} story(ies)</strong> (plus their sub-tasks if enabled) '
+            f'as <em>real issues</em> in <strong>{_esc(_proj)}</strong>. '
+            f'This action cannot be automatically undone.</div>',
+            unsafe_allow_html=True,
+        )
 
-    if st.button(
-        f"⤴  Create in Jira ({_proj})",
-        type="primary",
-        use_container_width=True,
-        key="jira_dlg_go",
-        disabled=not _confirmed,
-    ):
-        with st.spinner(f"Creating issues in {_proj}…"):
-            try:
-                from tools.jira_tool import JiraTool
-                st.session_state["jira_publish_result"] = JiraTool(mode="live").publish_synthesis(
-                    res, create_subtasks=_subs)
-            except Exception as e:  # noqa: BLE001
-                st.session_state["jira_publish_result"] = {"error": str(e)}
+        # Mandatory confirmation for contributors; admins also confirm (same gate).
+        _confirmed = st.checkbox(
+            f"I confirm: create {_n_sel_epics} epic(s) and {_n_sel_stories} "
+            f"story(ies) in **{_proj}**",
+            value=False,
+            key="jira_dlg_confirm",
+        )
 
-    if not _confirmed:
-        st.caption("Tick the confirmation checkbox above to enable the Create button.")
+        if st.button(
+            f"⤴  Create selected in Jira ({_proj})",
+            type="primary",
+            use_container_width=True,
+            key="jira_dlg_go",
+            disabled=not _confirmed or not _selected,
+        ):
+            with st.spinner(f"Creating issues in {_proj}…"):
+                try:
+                    from tools.jira_tool import JiraTool
+                    _res_pub = JiraTool(mode="live").publish_synthesis(
+                        res,
+                        create_subtasks=_subs,
+                        selected_ids=_selected,
+                        published_map=_pub_map,
+                    )
+                    st.session_state["jira_publish_result"] = _res_pub
+                    # Carry the merged map forward so the next push skips these.
+                    st.session_state["jira_published_map"] = _res_pub.get(
+                        "published_map", _pub_map
+                    )
+                except Exception as e:  # noqa: BLE001
+                    st.session_state["jira_publish_result"] = {"error": str(e)}
+            st.rerun()
+
+        if not _confirmed:
+            st.caption("Tick the confirmation checkbox above to enable the Create button.")
 
     _pub = st.session_state.get("jira_publish_result")
+    _map_now: dict = st.session_state.get("jira_published_map") or {}
     if _pub:
         if _pub.get("error"):
             st.error(f"Jira publish failed: {_pub['error']}")
         else:
             _c = _pub["counts"]
-            st.success(f"Created {_c['epics']} epic(s), {_c['stories']} story(ies), "
-                       f"{_c['subtasks']} sub-task(s) in {_pub['project']}.")
-            for _it in _pub["created"]:
-                if _it["level"] in ("epic", "story"):
-                    _pad = "" if _it["level"] == "epic" else "&nbsp;&nbsp;&nbsp;&nbsp;↳ "
-                    st.markdown(f'{_pad}<a href="{_it["url"]}" target="_blank">{_it["key"]}</a> — {_it["summary"]}',
-                                unsafe_allow_html=True)
+            _new_total = _c["epics"] + _c["stories"] + _c["subtasks"]
+            _skipped = _pub.get("skipped", 0)
+            if _new_total:
+                _msg = (f"Created {_c['epics']} epic(s), {_c['stories']} story(ies), "
+                        f"{_c['subtasks']} sub-task(s) in {_pub['project']}.")
+                if _skipped:
+                    _msg += f" Skipped {_skipped} item(s) already in Jira."
+                st.success(_msg)
+            elif _skipped:
+                st.info(f"Nothing new created — {_skipped} selected item(s) were "
+                        "already in Jira.")
+
+            # List everything created for this synthesis so far (cumulative),
+            # in epic→story order, sourced from the merged published map.
+            if _map_now:
+                st.markdown("**In Jira so far:**")
+                for _epic in _epics:
+                    _eid = _epic.get("id") or ""
+                    if _eid in _map_now:
+                        _it = _map_now[_eid]
+                        st.markdown(
+                            f'<a href="{_it["url"]}" target="_blank">{_esc(_it["key"])}</a> '
+                            f'— {_esc(_it.get("summary", _epic.get("title", "")))}',
+                            unsafe_allow_html=True,
+                        )
+                    for _story in _epic.get("stories") or []:
+                        _sid = _story.get("id") or ""
+                        if _sid in _map_now:
+                            _it = _map_now[_sid]
+                            st.markdown(
+                                f'&nbsp;&nbsp;&nbsp;&nbsp;↳ '
+                                f'<a href="{_it["url"]}" target="_blank">{_esc(_it["key"])}</a> '
+                                f'— {_esc(_it.get("summary", _story.get("title", "")))}',
+                                unsafe_allow_html=True,
+                            )
 
             # ── Two-way sync: read back current Jira status ───────────────────
+            # Sync against the cumulative map so every published item is covered,
+            # not only the ones created on the most recent push.
+            _cum_created = [v for v in _map_now.values()
+                            if v.get("level") in ("epic", "story", "subtask")]
             st.divider()
             if st.button("🔄  Sync status from Jira", key="jira_sync_btn",
                          use_container_width=True,
@@ -1987,7 +2089,8 @@ def show_jira_dialog() -> None:
                 with st.spinner("Fetching current status from Jira…"):
                     try:
                         from tools.jira_tool import JiraTool as _JT2
-                        _sync_statuses = _JT2(mode="live").sync_published_stories(_pub)
+                        _sync_statuses = _JT2(mode="live").sync_published_stories(
+                            {"created": _cum_created})
                         st.session_state["jira_sync_statuses"] = _sync_statuses
                     except Exception as _se:
                         st.error(f"Sync failed: {_se}")
@@ -2058,7 +2161,8 @@ with _hdr_right:
             )
 
 if _nav_clicked.get("home"):
-    for _k in ("result", "run_dir", "jira_publish_result"):
+    for _k in ("result", "run_dir", "jira_publish_result",
+               "jira_published_map", "jira_sync_statuses"):
         st.session_state[_k] = None
     st.rerun()
 if _nav_clicked.get("history"):
@@ -2673,6 +2777,11 @@ if run_clicked or _main_canvas_run:
     increment_request_count(_current_user)
 
     st.session_state.result = result
+    # A new synthesis invalidates any prior Jira publish state — clear it so the
+    # dialog doesn't mark this run's items as already-published from a past run.
+    st.session_state["jira_publish_result"] = None
+    st.session_state["jira_published_map"] = None
+    st.session_state["jira_sync_statuses"] = None
     st.session_state.run_dir = run_dir
     st.session_state.elapsed = elapsed
     st.session_state.source_label = source_label
