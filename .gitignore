@@ -42,3 +42,14 @@ config/auth.yaml
 
 # One-time Azure provisioning script — kept locally but not tracked in git
 scripts/azure_setup.sh
+
+# Personal code walkthrough — local understanding only, never tracked in git
+docs/CODE_EXPLAINED.md
+
+# Interview prep artifacts — local only, never tracked in git
+docs/SESSION_1_WALKTHROUGH.md
+docs/SESSION_1_WALKTHROUGH.docx
+docs/SESSION_1_ONEPAGER.md
+docs/SESSION_1_SLIDES.md
+docs/SESSION_2_DEEPDIVE_PREP.md
+docs/FUNDAMENTALS_QA_PREP.md
